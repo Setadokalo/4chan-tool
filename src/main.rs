@@ -1,127 +1,55 @@
-use std::{fmt::Debug, sync::{Arc, Mutex}, thread, time::Duration};
+use std::{sync::{Arc, Mutex}, thread, time::Duration};
 
-use chrono::{DateTime, NaiveDateTime, Utc};
-use cursive::{direction::Orientation, theme::{BaseColor, Color, Theme}, views::{Button, LinearLayout, Panel, ResizedView, TextView}};
-use serde::{Deserialize, Deserializer, Serialize};
+use chan_data::Thread;
+use chrono::Utc;
+use config::ThreadConfig;
+use cursive::{Cursive, direction::Orientation, theme::{BaseColor, BorderStyle, Color}, traits::{Boxable, Nameable}, views::{Button, Dialog, EditView, LinearLayout, Panel, ResizedView, TextView}};
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ThreadConfig {
-	pub board: String,
-	pub id: String,
-	pub name: String,
-	#[serde(skip, default = "get_unix_epoch")]
-	pub last_modified: DateTime<Utc>,
-}
+mod chan_data;
 
-fn get_unix_epoch() -> DateTime<Utc> {
-	DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
-}
+mod config {
+	use std::fmt::Debug;
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Thread {
-	posts: Vec<Post>,
-}
-#[derive(Serialize, Deserialize, Debug)]
-struct Post {
-	#[serde(flatten)]
-	op: Option<OpData>,                 // contains data specific to the OP if this post is the OP
-	no: isize,                          // post ID
-	resto: isize,                       // ID of the thread (or 0 if this is the OP)
-	now: String, 
-	time: isize,                        // time post was created
-	name: String,                       // user name
-	trip: Option<String>,               // user tripcode, whatever that is
-	id: Option<String>,                 // user ID?
-	capcode: Option<String>,            // post capcode, whatever that is
-	country: Option<String>,            // country code
-	country_name: Option<String>,       // country name
-	com: Option<String>,                // comment
-	#[serde(flatten)]
-	attachment: Option<AttachmentData>, // data for post's attachment if present
-	since4pass: Option<isize>,          // year 4chan pass bought
-	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	m_img: bool,                        // if post has mobile optimized image
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct AttachmentData {
-	tim: isize,                          // image upload timestamp
-	filename: String,                    // file name
-	ext: String,                         // file extension
-	fsize: isize,                        // file size
-	md5: String,                         // md5 of file
-	w: isize,                            // image width
-	h: isize,                            // image height
-	tn_w: isize,                         // thumbnail width
-	tn_h: isize,                         // thumbnail height
-	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	filedeleted: bool,                   // if the file has been deleted
-	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	spoiler: bool,                       // if the file is spoilered
-	custom_spoiler: Option<isize>,       // custom spoiler ID
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct OpData {
-	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	sticky: bool,                        // if the thread is pinned
-	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	closed: bool,                        // if the thread is closed to replies
-	sub: Option<String>,                 // subject text
-	replies:isize,                       // total number of replies
-	images: isize,                       // total number of image replies
-	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	bumplimit: bool,                     // if the thread has reached the bump limit
-	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	imagelimit: bool,                    // if the thread has reached the image limit
-	tag: Option<String>,                 // (/f/ only) category of the .swf upload
-	semantic_url: String,                // SEO URL slug for thread
-	unique_ips: Option<isize>,           // Number of unique posters in thread
-
-	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	archived: bool,                      // if the thread has been archived
-	archived_on: Option<isize>,          // archived date
-}
-
-pub fn opt_int_to_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-	D: Deserializer<'de>,
-{
-	if let Ok(res) = Option::<isize>::deserialize(deserializer) {
-		match res  {
-			Some(1) => Ok(true),
-			_ => Ok(false),
-		}
-	} else {
-		Ok(false)
+	use chrono::{DateTime, NaiveDateTime, Utc};
+	use serde::{Deserialize, Serialize};
+	#[derive(Debug, Serialize, Deserialize)]
+	pub struct ThreadConfig {
+		pub board: String,
+		pub id: String,
+		pub name: String,
+		#[serde(skip, default = "get_unix_epoch")]
+		pub last_modified: DateTime<Utc>,
 	}
-}
-
-fn load_config(raw_config: String) -> Vec<ThreadConfig> {
-	let mut new_config = Vec::new();
-	for (i, line) in raw_config.split("\n").enumerate().filter(|(_, s)| !s.is_empty()) {
-		let mut config_iter = line.trim().splitn(2, |c: char| c.is_whitespace());
-		if let Some(thread_config) = config_iter.next() {
-			let target: Vec<&str> = thread_config.split("/").collect();
-			if target.len() != 3 {
-				println!("Unrecognized board link structure at line {}: {}", i, thread_config);
-				continue;
+	
+	pub fn get_unix_epoch() -> DateTime<Utc> {
+		DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
+	}
+	#[cfg(test)] // temporary to make the unused warning go away
+	pub fn load_config(raw_config: String) -> Vec<ThreadConfig> {
+		let mut new_config = Vec::new();
+		for (i, line) in raw_config.split("\n").enumerate().filter(|(_, s)| !s.is_empty()) {
+			let mut config_iter = line.trim().splitn(2, |c: char| c.is_whitespace());
+			if let Some(thread_config) = config_iter.next() {
+				let target: Vec<&str> = thread_config.split("/").collect();
+				if target.len() != 3 {
+					println!("Unrecognized board link structure at line {}: {}", i, thread_config);
+					continue;
+				}
+				// the rest of the string is in the second iterator value (or there isn't one, in which case we default to the thread config string)
+				let name = config_iter.next().unwrap_or(thread_config).trim().to_string();
+				
+				new_config.push(ThreadConfig {
+					board: target[1].to_string(), 
+					id: target[2].to_string(), 
+					name, 
+					// the unix epoch
+					last_modified: get_unix_epoch()
+				});
 			}
-			// the rest of the string is in the second iterator value (or there isn't one, in which case we default to the thread config string)
-			let name = config_iter.next().unwrap_or(thread_config).trim().to_string();
-			
-			new_config.push(ThreadConfig {
-				board: target[1].to_string(), 
-				id: target[2].to_string(), 
-				name, 
-				// the unix epoch
-				last_modified: get_unix_epoch()
-			});
 		}
-	}
-	new_config
+		new_config
+	}	
 }
-
 #[allow(dead_code)]
 fn watch_threads(thread_list: Arc<Mutex<Vec<ThreadConfig>>>) -> ! {
 	println!("Watch daemon started with these threads:");
@@ -159,36 +87,86 @@ fn main() {
 		theme.palette.set_color("primary", Color::Light(BaseColor::White));
 		theme.palette.set_color("secondary", Color::Light(BaseColor::Blue));
 		theme.palette.set_color("tertiary", Color::Light(BaseColor::Red));
+		theme.shadow = false;
 	});
 
-	siv.add_fullscreen_layer(
-		LinearLayout::new(Orientation::Vertical)
-		   .child(
-				LinearLayout::new(Orientation::Horizontal)
-					.child(Panel::new(ResizedView::with_full_screen(TextView::new("Hello, Panel!"))))
-		         .child(Panel::new(ResizedView::with_full_screen(TextView::new("Hello, Other Panel!"))))
-			)
-		   .child(
-				LinearLayout::new(Orientation::Horizontal)
-					.child(Button::new("Quit", |c| c.quit()))
-			)
-	);
+	// siv.add_fullscreen_layer(
+	// 	LinearLayout::new(Orientation::Vertical)
+	// 	   .child(
+	// 			LinearLayout::new(Orientation::Horizontal)
+	// 				.child(Panel::new(ResizedView::with_full_screen(TextView::new("Hello, Panel!"))))
+	// 	         .child(Panel::new(ResizedView::with_full_screen(TextView::new("Hello, Other Panel!"))))
+	// 		)
+	// 	   .child(
+	// 			LinearLayout::new(Orientation::Horizontal)
+	// 				.child(Button::new("Quit", |c| c.quit()))
+	// 		)
+	// );
+	
+	siv.add_layer(
+		Dialog::new()
+			 .title("Enter your name")
+			 // Padding is (left, right, top, bottom)
+			 .padding_lrtb(1, 1, 1, 0)
+			 .content(
+				  EditView::new()
+						// Call `show_popup` when the user presses `Enter`
+						.on_submit(show_popup)
+						// Give the `EditView` a name so we can refer to it later.
+						.with_name("name")
+						// Wrap this in a `ResizedView` with a fixed width.
+						// Do this _after_ `with_name` or the name will point to the
+						// `ResizedView` instead of `EditView`!
+						.fixed_width(50),
+			 )
+			 .button("Ok", |s| {
+				  // This will run the given closure, *ONLY* if a view with the
+				  // correct type and the given name is found.
+				  let name = s
+						.call_on_name("name", |view: &mut EditView| {
+							 // We can return content from the closure!
+							 view.get_content()
+						})
+						.unwrap();
+
+				  // Run the next step
+				  show_popup(s, &name);
+			 }),
+  );
 	siv.run();
+}
+
+// This will replace the current layer with a new popup.
+// If the name is empty, we'll show an error message instead.
+fn show_popup(s: &mut Cursive, name: &str) {
+	if name.is_empty() {
+		 // Try again as many times as we need!
+		 s.add_layer(Dialog::info("Please enter a name!"));
+	} else {
+		 let content = format!("Hello {}!", name);
+		 // Remove the initial popup
+		 s.pop_layer();
+		 // And put a new one instead
+		 s.add_layer(
+			  Dialog::around(TextView::new(content))
+					.button("Quit", |s| s.quit()),
+		 );
+	}
 }
 
 #[cfg(test)]
 mod tests {
-	use crate::Thread;
+	use crate::chan_data::Thread;
 	use serde::{Deserialize, Serialize};
 	#[test]
 	fn test_load() {
-		let bc = crate::load_config("
+		let bc = crate::config::load_config("
 			\t  4chan/board/47357       garbage that is a name\n
-					 4chan/board/23612           some bullshit
+					 4chan/board/23612           some text
 			4chan/board/42672
 			".to_string());
 		assert!(bc[0].name == "garbage that is a name");
-		assert!(bc[1].name == "some bullshit");
+		assert!(bc[1].name == "some text");
 		assert!(bc[2].name == "4chan/board/42672");
 	}
 	
