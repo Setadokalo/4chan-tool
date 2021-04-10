@@ -1,17 +1,24 @@
-use std::{thread, time::Duration};
+use std::{fmt::Debug, sync::{Arc, Mutex}, thread, time::Duration};
 
 use chrono::{DateTime, NaiveDateTime, Utc};
+use cursive::{direction::Orientation, theme::{BaseColor, Color, Theme}, views::{Button, LinearLayout, Panel, ResizedView, TextView}};
 use serde::{Deserialize, Deserializer, Serialize};
 
-struct BoardConfig {
+#[derive(Debug, Serialize, Deserialize)]
+struct ThreadConfig {
 	pub board: String,
 	pub id: String,
 	pub name: String,
+	#[serde(skip, default = "get_unix_epoch")]
 	pub last_modified: DateTime<Utc>,
 }
 
+fn get_unix_epoch() -> DateTime<Utc> {
+	DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
+}
+
 #[derive(Serialize, Deserialize, Debug)]
-struct PostResponse {
+struct Thread {
 	posts: Vec<Post>,
 }
 #[derive(Serialize, Deserialize, Debug)]
@@ -35,6 +42,7 @@ struct Post {
 	#[serde(default, deserialize_with = "opt_int_to_bool")]
 	m_img: bool,                        // if post has mobile optimized image
 }
+
 #[derive(Serialize, Deserialize, Debug)]
 struct AttachmentData {
 	tim: isize,                          // image upload timestamp
@@ -89,7 +97,7 @@ where
 	}
 }
 
-fn load_config(raw_config: String) -> Vec<BoardConfig> {
+fn load_config(raw_config: String) -> Vec<ThreadConfig> {
 	let mut new_config = Vec::new();
 	for (i, line) in raw_config.split("\n").enumerate().filter(|(_, s)| !s.is_empty()) {
 		let mut config_iter = line.trim().splitn(2, |c: char| c.is_whitespace());
@@ -102,63 +110,103 @@ fn load_config(raw_config: String) -> Vec<BoardConfig> {
 			// the rest of the string is in the second iterator value (or there isn't one, in which case we default to the thread config string)
 			let name = config_iter.next().unwrap_or(thread_config).trim().to_string();
 			
-			new_config.push(BoardConfig {
+			new_config.push(ThreadConfig {
 				board: target[1].to_string(), 
 				id: target[2].to_string(), 
 				name, 
 				// the unix epoch
-				last_modified: DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)});
+				last_modified: get_unix_epoch()
+			});
 		}
 	}
 	new_config
 }
 
-#[test]
-fn test_load() {
-	let bc = load_config("
-	   \t  4chan/board/47357       garbage that is a name\n
-		       4chan/board/23612           some bullshit
-		4chan/board/42672
-		".to_string());
-	assert!(bc[0].name == "garbage that is a name");
-	assert!(bc[1].name == "some bullshit");
-	assert!(bc[2].name == "4chan/board/42672");
-}
-
-
-#[test]
-fn test_deser() {
-	#[derive(Deserialize, Serialize, Debug)]
-	struct Test {
-		data: Option<isize>
-	}
-	let test = std::fs::read_to_string("dummy.json").unwrap();
-	let tested: PostResponse = serde_json::de::from_str(&test).unwrap();
-}
-
-fn main() -> () {
-	let mut thread_list = if let Ok(old_config) = std::fs::read_to_string("C:/etc/4chan/boards.conf") {
-		load_config(old_config)
-	} else {
-		todo!("possibly parse more modern format")
-	};
-	println!("Parsed config, got these entries:");
-	for config in thread_list.iter() {
+#[allow(dead_code)]
+fn watch_threads(thread_list: Arc<Mutex<Vec<ThreadConfig>>>) -> ! {
+	println!("Watch daemon started with these threads:");
+	for config in (*thread_list).lock().unwrap().iter() {
 		println!("Thread \"{}\" in board \"{}\" with name \"{}\"", config.id, config.board, config.name);
 	}
 	let client = reqwest::blocking::Client::new();
 	loop {
-		for mut thread in thread_list.iter_mut() {
-			let req = client.get(format!("https://a.4cdn.org/{}/thread/{}.json", thread.board, thread.id))
-					.header("If-Modified-Since", thread.last_modified.to_rfc2822().replace("+0000", "GMT"))
+		for mut thread_cfg in (*thread_list).lock().unwrap().iter_mut() {
+			let req = client.get(format!("https://a.4cdn.org/{}/thread/{}.json", thread_cfg.board, thread_cfg.id))
+					.header("If-Modified-Since", thread_cfg.last_modified.to_rfc2822().replace("+0000", "GMT"))
 					.build()
 					.expect("Failed to build request");
 			let resp = client.execute(req).expect("Error requesting page");
-			println!("{}", resp.text().expect("failed to parse response"));
-			thread.last_modified = Utc::now();
+			if let Ok(thread) = resp.json::<Thread>() {
+				for post in thread.posts.iter() {
+					println!("{:#?}", post);
+				}
+			} else {
+				println!("Failed to parse response - assuming empty response body")
+			}
+			thread_cfg.last_modified = Utc::now();
 			// avoid spamming the API
 			thread::sleep(Duration::from_secs(1));	
 		}
 		thread::sleep(Duration::from_secs(20));
+	}
+}
+
+fn main() {
+	let mut siv = cursive::default();
+	siv.update_theme(|theme| {
+		theme.palette.set_color("background", Color::Dark(BaseColor::Black));
+		theme.palette.set_color("view", Color::Dark(BaseColor::Black));
+		theme.palette.set_color("primary", Color::Light(BaseColor::White));
+		theme.palette.set_color("secondary", Color::Light(BaseColor::Blue));
+		theme.palette.set_color("tertiary", Color::Light(BaseColor::Red));
+	});
+
+	siv.add_fullscreen_layer(
+		LinearLayout::new(Orientation::Vertical)
+		   .child(
+				LinearLayout::new(Orientation::Horizontal)
+					.child(Panel::new(ResizedView::with_full_screen(TextView::new("Hello, Panel!"))))
+		         .child(Panel::new(ResizedView::with_full_screen(TextView::new("Hello, Other Panel!"))))
+			)
+		   .child(
+				LinearLayout::new(Orientation::Horizontal)
+					.child(Button::new("Quit", |c| c.quit()))
+			)
+	);
+	siv.run();
+}
+
+#[cfg(test)]
+mod tests {
+	use crate::Thread;
+	use serde::{Deserialize, Serialize};
+	#[test]
+	fn test_load() {
+		let bc = crate::load_config("
+			\t  4chan/board/47357       garbage that is a name\n
+					 4chan/board/23612           some bullshit
+			4chan/board/42672
+			".to_string());
+		assert!(bc[0].name == "garbage that is a name");
+		assert!(bc[1].name == "some bullshit");
+		assert!(bc[2].name == "4chan/board/42672");
+	}
+	
+	
+	#[test]
+	fn test_deser() {
+		#[derive(Deserialize, Serialize, Debug)]
+		struct Test {
+			data: Option<isize>
+		}
+		let test = std::fs::read_to_string("dummy.json").unwrap();
+		let tested: Thread = serde_json::de::from_str(&test).unwrap();
+		assert!(tested.posts.len() == 3);
+		assert!(tested.posts.get(0).unwrap().op.is_some());
+		assert!(tested.posts.get(0).unwrap().attachment.is_some());
+		assert!(tested.posts.get(1).unwrap().op.is_none());
+		assert!(tested.posts.get(1).unwrap().attachment.is_some());
+		assert!(tested.posts.get(2).unwrap().op.is_none());
+		assert!(tested.posts.get(2).unwrap().attachment.is_some());
 	}
 }
