@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -65,6 +65,68 @@ pub struct OpData {
 	#[serde(default, deserialize_with = "opt_int_to_bool")]
 	archived: bool,                      // if the thread has been archived
 	archived_on: Option<isize>,          // archived date
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Board {
+	pub board: String,
+	pub title: String,
+	#[serde(rename = "ws_board", default, deserialize_with ="opt_int_to_bool")]
+	pub sfw: bool,
+	#[serde(rename = "per_page")]
+	pub threads_per_page: usize,
+	pub pages: usize,
+	pub max_filesize: usize,
+	pub max_webm_filesize: usize,
+	pub max_comment_chars: usize,
+	pub bump_limit: usize,
+	pub image_limit: usize,
+	// pub cooldowns: Vec<!> // this is just defined as "an array" on the docs...
+	pub meta_description: String,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub spoilers: bool,
+	pub custom_spoilers: Option<usize>,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub is_archived: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub troll_flags: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub country_flags: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub user_ids: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub oekaki: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub sjis_tags: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub code_tags: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub math_tags: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub text_only: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub forced_anon: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub webm_audio: bool,
+	#[serde(default, deserialize_with = "opt_int_to_bool")]
+	pub require_subject: bool,
+	pub min_image_width: Option<usize>,
+	pub min_image_height: Option<usize>,
+	
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct BoardsResponse {
+	pub boards: Vec<Board>,
+	pub troll_flags: Option<HashMap<String, String>>
+}
+
+#[test]
+fn test_board_deserialize() {
+	let test = std::fs::read_to_string("boards.json").unwrap();
+	let tested: BoardsResponse = serde_json::de::from_str(&test).unwrap();
+	assert!(tested.boards.len() == 79);
+	assert!(tested.troll_flags.is_some())
 }
 
 pub fn opt_int_to_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>

@@ -1,9 +1,9 @@
-use std::{sync::{Arc, Mutex}, thread, time::Duration};
+use std::{sync::{Arc, Mutex, Once}, thread, time::Duration};
 
-use chan_data::Thread;
+use chan_data::{BoardsResponse, Thread};
 use chrono::Utc;
 use config::ThreadConfig;
-use cursive::{Cursive, direction::Orientation, theme::{BaseColor, BorderStyle, Color}, traits::{Boxable, Nameable}, views::{Button, Dialog, EditView, LinearLayout, Panel, ResizedView, TextView}};
+use cursive::{Vec2, View, direction::Orientation, theme::{BaseColor, Color}, traits::*, view::SizeConstraint, views::{Button, LinearLayout, SelectView, Panel, ResizedView, ScrollView, TextView}};
 
 mod chan_data;
 
@@ -50,20 +50,57 @@ mod config {
 		new_config
 	}	
 }
+
+trait ResizableWeak: Boxable {
+	/// returns the self in a double resized view wrapper, which forces the `self` to request space (but not force it)
+	/// up until it's SizeConstraint limit.
+	fn resized_weak(self, width: SizeConstraint, height: SizeConstraint) -> ResizedView<ResizedView<Self>> {
+		self.resized(SizeConstraint::Full, SizeConstraint::Full).resized(width, height)
+	}
+	/// same as `resized_weak`, but automatically uses `SizeConstraint::Free` for the height
+	fn resized_weak_w(self, width: SizeConstraint) -> ResizedView<ResizedView<Self>> {
+		self.resized(SizeConstraint::Full, SizeConstraint::Full).resized(width, SizeConstraint::Free)
+	}
+	/// same as `resized_weak`, but automatically uses `SizeConstraint::Free` for the width
+	fn resized_weak_h(self, height: SizeConstraint) -> ResizedView<ResizedView<Self>> {
+		self.resized(SizeConstraint::Full, SizeConstraint::Full).resized(SizeConstraint::Free, height)
+	}
+}
+
+impl<T> ResizableWeak for T where T: Boxable {}
+trait Panelable: View {
+	// returns the self in a double resized view wrapper, which forces the `self` to request space (but not force it)
+	// up until it's SizeConstraint limit.
+	fn in_panel(self) -> Panel<Self> where Self: Sized {
+		Panel::new(self)
+	}
+}
+
+impl<T> Panelable for T where T: View {}
+
+static mut CLIENT: Option<reqwest::blocking::Client> = None;
+static CLIENT_ONCE: Once = Once::new();
+
+fn get_client() -> &'static reqwest::blocking::Client {
+	unsafe {
+		CLIENT_ONCE.call_once(|| CLIENT = Some(reqwest::blocking::Client::new()));
+		CLIENT.as_ref().unwrap()
+	}
+}
+	
 #[allow(dead_code)]
 fn watch_threads(thread_list: Arc<Mutex<Vec<ThreadConfig>>>) -> ! {
 	println!("Watch daemon started with these threads:");
 	for config in (*thread_list).lock().unwrap().iter() {
 		println!("Thread \"{}\" in board \"{}\" with name \"{}\"", config.id, config.board, config.name);
 	}
-	let client = reqwest::blocking::Client::new();
 	loop {
 		for mut thread_cfg in (*thread_list).lock().unwrap().iter_mut() {
-			let req = client.get(format!("https://a.4cdn.org/{}/thread/{}.json", thread_cfg.board, thread_cfg.id))
+			let req = get_client().get(format!("https://a.4cdn.org/{}/thread/{}.json", thread_cfg.board, thread_cfg.id))
 					.header("If-Modified-Since", thread_cfg.last_modified.to_rfc2822().replace("+0000", "GMT"))
 					.build()
 					.expect("Failed to build request");
-			let resp = client.execute(req).expect("Error requesting page");
+			let resp = get_client().execute(req).expect("Error requesting page");
 			if let Ok(thread) = resp.json::<Thread>() {
 				for post in thread.posts.iter() {
 					println!("{:#?}", post);
@@ -79,6 +116,33 @@ fn watch_threads(thread_list: Arc<Mutex<Vec<ThreadConfig>>>) -> ! {
 	}
 }
 
+struct Divider {
+	orientation: Orientation
+}
+
+impl Divider {
+	pub fn new(orientation: Orientation) -> Divider {
+		Divider {orientation}
+	}
+	pub fn horizontal() -> Divider {
+		Self::new(Orientation::Horizontal)
+	}
+	pub fn vertical() -> Divider {
+		Self::new(Orientation::Vertical)
+	}
+}
+
+impl View for Divider {
+	fn draw(&self, printer: &cursive::Printer) {
+		if self.orientation == Orientation::Horizontal {
+			//  panic!("{}, {:?}, {:?}", std::iter::repeat("X").take(printer.size.y).collect::<String>(), printer.offset, printer.size);
+			printer.print_hline(Vec2::zero(), printer.size.x, "-");
+		} else {
+			printer.print_vline(Vec2::zero(), printer.size.y, "|")
+		}
+	}
+}
+
 fn main() {
 	let mut siv = cursive::default();
 	siv.update_theme(|theme| {
@@ -89,75 +153,54 @@ fn main() {
 		theme.palette.set_color("tertiary", Color::Light(BaseColor::Red));
 		theme.shadow = false;
 	});
+	type SiCon = SizeConstraint;
+	siv.add_fullscreen_layer(
+		LinearLayout::vertical()
+		   .child(LinearLayout::horizontal()
+				.child(create_board_view().in_panel())
+				.child(LinearLayout::horizontal()
+					.child(ResizedView::with_full_screen(TextView::new("Hello, Other Panel!").with_name("Board")))
+					.child(Divider::vertical())
+					.child(TextView::new("Panels are interesting!").resized_weak_w(SiCon::AtMost(20)))
+					.in_panel()
+				)
+			)
+		   .child(
+				LinearLayout::horizontal()
+					.child(Button::new("Quit", |c| c.quit()))
+			)
+	);
 
-	// siv.add_fullscreen_layer(
-	// 	LinearLayout::new(Orientation::Vertical)
-	// 	   .child(
-	// 			LinearLayout::new(Orientation::Horizontal)
-	// 				.child(Panel::new(ResizedView::with_full_screen(TextView::new("Hello, Panel!"))))
-	// 	         .child(Panel::new(ResizedView::with_full_screen(TextView::new("Hello, Other Panel!"))))
-	// 		)
-	// 	   .child(
-	// 			LinearLayout::new(Orientation::Horizontal)
-	// 				.child(Button::new("Quit", |c| c.quit()))
-	// 		)
-	// );
-	
-	siv.add_layer(
-		Dialog::new()
-			 .title("Enter your name")
-			 // Padding is (left, right, top, bottom)
-			 .padding_lrtb(1, 1, 1, 0)
-			 .content(
-				  EditView::new()
-						// Call `show_popup` when the user presses `Enter`
-						.on_submit(show_popup)
-						// Give the `EditView` a name so we can refer to it later.
-						.with_name("name")
-						// Wrap this in a `ResizedView` with a fixed width.
-						// Do this _after_ `with_name` or the name will point to the
-						// `ResizedView` instead of `EditView`!
-						.fixed_width(50),
-			 )
-			 .button("Ok", |s| {
-				  // This will run the given closure, *ONLY* if a view with the
-				  // correct type and the given name is found.
-				  let name = s
-						.call_on_name("name", |view: &mut EditView| {
-							 // We can return content from the closure!
-							 view.get_content()
-						})
-						.unwrap();
-
-				  // Run the next step
-				  show_popup(s, &name);
-			 }),
-  );
 	siv.run();
 }
 
-// This will replace the current layer with a new popup.
-// If the name is empty, we'll show an error message instead.
-fn show_popup(s: &mut Cursive, name: &str) {
-	if name.is_empty() {
-		 // Try again as many times as we need!
-		 s.add_layer(Dialog::info("Please enter a name!"));
-	} else {
-		 let content = format!("Hello {}!", name);
-		 // Remove the initial popup
-		 s.pop_layer();
-		 // And put a new one instead
-		 s.add_layer(
-			  Dialog::around(TextView::new(content))
-					.button("Quit", |s| s.quit()),
-		 );
+fn create_board_view() -> ScrollView<SelectView> {
+
+	let mut layout = SelectView::new();
+	let boards = get_4chan_boards();
+	for board in boards.boards.iter() {
+		layout.add_item(format!("/{}/: {}", board.board, board.title), board.board.clone());
+		//layout.add_child(Divider::horizontal());
 	}
+	layout.set_on_submit(|c, item: &String| {
+		c.call_on_name("Board", |view: &mut TextView| {
+			view.set_content(format!("User selected panel {}", item))
+		});
+	});
+	layout.scrollable()
+}
+
+fn get_4chan_boards() -> BoardsResponse {
+	let req = get_client().get("https://a.4cdn.org/boards.json")
+					.build()
+					.expect("Failed to build boards list request");
+	let resp = get_client().execute(req).expect("Error requesting boards list");
+	resp.json::<BoardsResponse>().expect("Failed to parse boards list")
 }
 
 #[cfg(test)]
 mod tests {
 	use crate::chan_data::Thread;
-	use serde::{Deserialize, Serialize};
 	#[test]
 	fn test_load() {
 		let bc = crate::config::load_config("
@@ -173,10 +216,6 @@ mod tests {
 	
 	#[test]
 	fn test_deser() {
-		#[derive(Deserialize, Serialize, Debug)]
-		struct Test {
-			data: Option<isize>
-		}
 		let test = std::fs::read_to_string("dummy.json").unwrap();
 		let tested: Thread = serde_json::de::from_str(&test).unwrap();
 		assert!(tested.posts.len() == 3);
