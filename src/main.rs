@@ -1,9 +1,10 @@
-use std::{sync::{Arc, Mutex, Once}, thread, time::Duration};
+use std::{borrow::Borrow, cell::RefCell, ops::Deref, rc::Rc, sync::{Arc, Mutex, Once}, thread, time::Duration};
 
 use chan_data::{BoardsResponse, Thread};
 use chrono::Utc;
 use config::ThreadConfig;
-use cursive::{Vec2, View, direction::Orientation, theme::{BaseColor, Color}, traits::*, view::SizeConstraint, views::{Button, LinearLayout, SelectView, Panel, ResizedView, ScrollView, TextView}};
+use cursive::{Cursive, menu::{MenuItem, MenuTree}};
+use cursive::{Vec2, View, direction::Orientation, theme::{BaseColor, Color}, traits::*, view::SizeConstraint, views::{LinearLayout, SelectView, Panel, ResizedView, ScrollView, TextView}};
 
 mod chan_data;
 
@@ -120,6 +121,7 @@ struct Divider {
 	orientation: Orientation
 }
 
+#[allow(dead_code)]
 impl Divider {
 	pub fn new(orientation: Orientation) -> Divider {
 		Divider {orientation}
@@ -143,8 +145,22 @@ impl View for Divider {
 	}
 }
 
+struct SettingsAndData {
+	boards: BoardsResponse,
+	show_nsfw: bool,
+}
+
 fn main() {
 	let mut siv = cursive::default();
+
+	let settings = Rc::new(RefCell::new(SettingsAndData {
+		boards: load_4chan_boards(),
+		show_nsfw: false,
+	}));
+
+	siv.set_user_data(settings.clone());
+
+	// load user theme TODO: load theme from file instead of hardcoded
 	siv.update_theme(|theme| {
 		theme.palette.set_color("background", Color::Dark(BaseColor::Black));
 		theme.palette.set_color("view", Color::Dark(BaseColor::Black));
@@ -153,77 +169,81 @@ fn main() {
 		theme.palette.set_color("tertiary", Color::Light(BaseColor::Red));
 		theme.shadow = false;
 	});
-	type SiCon = SizeConstraint;
-	siv.add_fullscreen_layer(
-		LinearLayout::vertical()
-		   .child(LinearLayout::horizontal()
-				.child(create_board_view().in_panel())
-				.child(LinearLayout::horizontal()
-					.child(ResizedView::with_full_screen(TextView::new("Hello, Other Panel!").with_name("Board")))
-					.child(Divider::vertical())
-					.child(TextView::new("Panels are interesting!").resized_weak_w(SiCon::AtMost(20)))
-					.in_panel()
-				)
-			)
-		   .child(
-				LinearLayout::horizontal()
-					.child(Button::new("Quit", |c| c.quit()))
-			)
+	let board_view = create_board_view(&mut siv).in_panel();
+	siv.add_fullscreen_layer(LinearLayout::horizontal()
+		.child(board_view)
+		.child(LinearLayout::vertical()
+			.child(ResizedView::with_full_screen(TextView::new("Hello, Other Panel!").with_name("Board")))
+			.child(Divider::horizontal())
+			.child(TextView::new("Panels are interesting!").resized_weak_h(SizeConstraint::AtMost(4)))
+			.in_panel()
+		)
 	);
-
+	siv.set_autohide_menu(false);
+	siv.menubar().add_leaf("Quit", |c| c.quit());
+	siv.menubar().add_subtree("Settings", MenuTree::new().leaf("Show NSFW Boards", move |c| {
+		{
+			let mut settings = settings.borrow_mut();
+			if let MenuItem::Leaf(s, c) = c.menubar().get_subtree(1).unwrap().get_mut(0).unwrap() {	
+				if settings.show_nsfw {
+					*s = "Show NSFW Boards".to_string();
+				} else {
+					*s = "Hide NSFW Boards".to_string();
+				}
+			} else {
+				panic!("unknown menu state");
+			}
+			settings.show_nsfw = !settings.show_nsfw;
+		}
+		c.call_on_name("boards_list", |b: &mut SelectView| {
+			b.clear();
+			add_boards_to_select(&(*settings).borrow(), b);
+		});
+	}));
+	siv.menubar().add_leaf("Press [ESC] to access the menu", |_| {});
+	siv.add_global_callback(cursive::event::Key::Esc, |c| {
+		c.select_menubar()
+	});
 	siv.run();
 }
 
-fn create_board_view() -> ScrollView<SelectView> {
+fn create_board_view(c: &mut Cursive) -> impl View {
 
 	let mut layout = SelectView::new();
-	let boards = get_4chan_boards();
-	for board in boards.boards.iter() {
-		layout.add_item(format!("/{}/: {}", board.board, board.title), board.board.clone());
-		//layout.add_child(Divider::horizontal());
-	}
+
+	add_boards_to_select(&get_boards(c).unwrap(), &mut layout);
+
 	layout.set_on_submit(|c, item: &String| {
 		c.call_on_name("Board", |view: &mut TextView| {
 			view.set_content(format!("User selected panel {}", item))
 		});
 	});
-	layout.scrollable()
+	layout.with_name("boards_list").scrollable()
 }
 
-fn get_4chan_boards() -> BoardsResponse {
+fn add_boards_to_select(settings: &SettingsAndData, layout: &mut SelectView) {
+	for board in settings.boards.boards.iter() {
+		if settings.show_nsfw || board.sfw {
+			layout.add_item(format!("/{}/: {}", board.board, board.title), board.board.clone());
+		} 
+	}
+}
+
+
+fn load_4chan_boards() -> BoardsResponse {
 	let req = get_client().get("https://a.4cdn.org/boards.json")
-					.build()
-					.expect("Failed to build boards list request");
+		.build()
+		.expect("Failed to build boards list request");
 	let resp = get_client().execute(req).expect("Error requesting boards list");
+
 	resp.json::<BoardsResponse>().expect("Failed to parse boards list")
 }
 
-#[cfg(test)]
-mod tests {
-	use crate::chan_data::Thread;
-	#[test]
-	fn test_load() {
-		let bc = crate::config::load_config("
-			\t  4chan/board/47357       garbage that is a name\n
-					 4chan/board/23612           some text
-			4chan/board/42672
-			".to_string());
-		assert!(bc[0].name == "garbage that is a name");
-		assert!(bc[1].name == "some text");
-		assert!(bc[2].name == "4chan/board/42672");
-	}
-	
-	
-	#[test]
-	fn test_deser() {
-		let test = std::fs::read_to_string("dummy.json").unwrap();
-		let tested: Thread = serde_json::de::from_str(&test).unwrap();
-		assert!(tested.posts.len() == 3);
-		assert!(tested.posts.get(0).unwrap().op.is_some());
-		assert!(tested.posts.get(0).unwrap().attachment.is_some());
-		assert!(tested.posts.get(1).unwrap().op.is_none());
-		assert!(tested.posts.get(1).unwrap().attachment.is_some());
-		assert!(tested.posts.get(2).unwrap().op.is_none());
-		assert!(tested.posts.get(2).unwrap().attachment.is_some());
+
+fn get_boards(c: &mut Cursive) -> Option<impl Deref<Target = SettingsAndData> + '_> {
+	if let Some(settings) = c.user_data::<Rc<RefCell<SettingsAndData>>>() {
+		Some((**settings).borrow())
+	} else {
+		None
 	}
 }

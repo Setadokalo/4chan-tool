@@ -123,7 +123,7 @@ pub struct BoardsResponse {
 
 #[test]
 fn test_board_deserialize() {
-	let test = std::fs::read_to_string("boards.json").unwrap();
+	let test = std::fs::read_to_string("assets/test/boards.json").unwrap();
 	let tested: BoardsResponse = serde_json::de::from_str(&test).unwrap();
 	assert!(tested.boards.len() == 79);
 	assert!(tested.troll_flags.is_some())
@@ -140,5 +140,36 @@ where
 		}
 	} else {
 		Ok(false)
+	}
+}
+
+
+#[cfg(test)]
+mod tests {
+	use super::Thread;
+	#[test]
+	fn test_load() {
+		let bc = crate::config::load_config("
+			\t  4chan/board/47357       garbage that is a name\n
+					 4chan/board/23612           some text
+			4chan/board/42672
+			".to_string());
+		assert!(bc[0].name == "garbage that is a name");
+		assert!(bc[1].name == "some text");
+		assert!(bc[2].name == "4chan/board/42672");
+	}
+	
+	
+	#[test]
+	fn test_deser() {
+		let test = std::fs::read_to_string("assets/test/dummy.json").unwrap();
+		let tested: Thread = serde_json::de::from_str(&test).unwrap();
+		assert!(tested.posts.len() == 3);
+		assert!(tested.posts.get(0).unwrap().op.is_some());
+		assert!(tested.posts.get(0).unwrap().attachment.is_some());
+		assert!(tested.posts.get(1).unwrap().op.is_none());
+		assert!(tested.posts.get(1).unwrap().attachment.is_some());
+		assert!(tested.posts.get(2).unwrap().op.is_none());
+		assert!(tested.posts.get(2).unwrap().attachment.is_some());
 	}
 }
