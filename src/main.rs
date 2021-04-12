@@ -1,10 +1,10 @@
-use std::{borrow::Borrow, cell::RefCell, ops::Deref, rc::Rc, sync::{Arc, Mutex, Once}, thread, time::Duration};
+use std::{cell::RefCell, ops::Deref, rc::Rc, sync::{Arc, Mutex, Once}, thread, time::Duration};
 
 use chan_data::{BoardsResponse, Thread};
 use chrono::Utc;
 use config::ThreadConfig;
 use cursive::{Cursive, menu::{MenuItem, MenuTree}};
-use cursive::{Vec2, View, direction::Orientation, theme::{BaseColor, Color}, traits::*, view::SizeConstraint, views::{LinearLayout, SelectView, Panel, ResizedView, ScrollView, TextView}};
+use cursive::{Vec2, View, direction::Orientation, theme::{BaseColor, Color}, traits::*, view::SizeConstraint, views::{LinearLayout, SelectView, Panel, ResizedView, TextView}};
 
 mod chan_data;
 
@@ -146,8 +146,10 @@ impl View for Divider {
 }
 
 struct SettingsAndData {
-	boards: BoardsResponse,
+	// settings
 	show_nsfw: bool,
+	// data
+	boards: BoardsResponse,
 }
 
 fn main() {
@@ -183,8 +185,8 @@ fn main() {
 	siv.menubar().add_leaf("Quit", |c| c.quit());
 	siv.menubar().add_subtree("Settings", MenuTree::new().leaf("Show NSFW Boards", move |c| {
 		{
-			let mut settings = settings.borrow_mut();
-			if let MenuItem::Leaf(s, c) = c.menubar().get_subtree(1).unwrap().get_mut(0).unwrap() {	
+			let mut settings = (*settings).borrow_mut();
+			if let MenuItem::Leaf(s, _) = c.menubar().get_subtree(1).unwrap().get_mut(0).unwrap() {	
 				if settings.show_nsfw {
 					*s = "Show NSFW Boards".to_string();
 				} else {
@@ -204,6 +206,9 @@ fn main() {
 	siv.add_global_callback(cursive::event::Key::Esc, |c| {
 		c.select_menubar()
 	});
+	// register a global callback listener to listen for input events that aren't handled and check if the board list is focused
+	// if it is, we'll go to the next
+
 	siv.run();
 }
 
