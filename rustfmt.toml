@@ -1,0 +1,15 @@
+unstable_features = true
+blank_lines_upper_bound = 2
+condense_wildcard_suffixes = true
+enum_discrim_align_threshold = 20
+struct_field_align_threshold = 10
+format_strings = true
+imports_indent = "Visual"
+imports_granularity = "Crate"
+overflow_delimited_expr = true
+
+# stable features
+hard_tabs = true
+tab_spaces = 3
+use_field_init_shorthand = true
+use_try_shorthand = true

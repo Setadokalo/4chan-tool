@@ -1,10 +1,20 @@
-use std::{cell::RefCell, ops::Deref, rc::Rc, sync::{Arc, Mutex, Once}, thread, time::Duration};
+use std::{cell::RefCell,
+          ops::Deref,
+          rc::Rc,
+          sync::{Arc, Mutex, Once},
+          thread,
+          time::Duration};
 
 use chan_data::{BoardsResponse, Thread};
 use chrono::Utc;
 use config::ThreadConfig;
-use cursive::{Cursive, menu::{MenuItem, MenuTree}};
-use cursive::{Vec2, View, direction::Orientation, theme::{BaseColor, Color}, traits::*, view::SizeConstraint, views::{LinearLayout, SelectView, Panel, ResizedView, TextView}};
+use cursive::{direction::Orientation,
+              menu::{MenuItem, MenuTree},
+              theme::{BaseColor, Color},
+              traits::*,
+              view::SizeConstraint,
+              views::{LinearLayout, Panel, ResizedView, SelectView, TextView},
+              Cursive, Vec2, View};
 
 mod chan_data;
 
@@ -21,50 +31,71 @@ mod config {
 		#[serde(skip, default = "get_unix_epoch")]
 		pub last_modified: DateTime<Utc>,
 	}
-	
+
 	pub fn get_unix_epoch() -> DateTime<Utc> {
 		DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
 	}
 	#[cfg(test)] // temporary to make the unused warning go away
 	pub fn load_config(raw_config: String) -> Vec<ThreadConfig> {
 		let mut new_config = Vec::new();
-		for (i, line) in raw_config.split("\n").enumerate().filter(|(_, s)| !s.is_empty()) {
+		for (i, line) in raw_config
+			.split("\n")
+			.enumerate()
+			.filter(|(_, s)| !s.is_empty())
+		{
 			let mut config_iter = line.trim().splitn(2, |c: char| c.is_whitespace());
 			if let Some(thread_config) = config_iter.next() {
 				let target: Vec<&str> = thread_config.split("/").collect();
 				if target.len() != 3 {
-					println!("Unrecognized board link structure at line {}: {}", i, thread_config);
+					println!(
+						"Unrecognized board link structure at line {}: {}",
+						i, thread_config
+					);
 					continue;
 				}
 				// the rest of the string is in the second iterator value (or there isn't one, in which case we default to the thread config string)
-				let name = config_iter.next().unwrap_or(thread_config).trim().to_string();
-				
+				let name = config_iter
+					.next()
+					.unwrap_or(thread_config)
+					.trim()
+					.to_string();
+
 				new_config.push(ThreadConfig {
-					board: target[1].to_string(), 
-					id: target[2].to_string(), 
-					name, 
+					board: target[1].to_string(),
+					id: target[2].to_string(),
+					name,
 					// the unix epoch
-					last_modified: get_unix_epoch()
+					last_modified: get_unix_epoch(),
 				});
 			}
 		}
 		new_config
-	}	
+	}
 }
 
 trait ResizableWeak: Boxable {
 	/// returns the self in a double resized view wrapper, which forces the `self` to request space (but not force it)
 	/// up until it's SizeConstraint limit.
-	fn resized_weak(self, width: SizeConstraint, height: SizeConstraint) -> ResizedView<ResizedView<Self>> {
-		self.resized(SizeConstraint::Full, SizeConstraint::Full).resized(width, height)
+	fn resized_weak(
+		self,
+		width: SizeConstraint,
+		height: SizeConstraint,
+	) -> ResizedView<ResizedView<Self>> {
+		self
+			.resized(SizeConstraint::Full, SizeConstraint::Full)
+			.resized(width, height)
 	}
 	/// same as `resized_weak`, but automatically uses `SizeConstraint::Free` for the height
 	fn resized_weak_w(self, width: SizeConstraint) -> ResizedView<ResizedView<Self>> {
-		self.resized(SizeConstraint::Full, SizeConstraint::Full).resized(width, SizeConstraint::Free)
+		self
+			.resized(SizeConstraint::Full, SizeConstraint::Full)
+			.resized(width, SizeConstraint::Free)
 	}
 	/// same as `resized_weak`, but automatically uses `SizeConstraint::Free` for the width
 	fn resized_weak_h(self, height: SizeConstraint) -> ResizedView<ResizedView<Self>> {
-		self.resized(SizeConstraint::Full, SizeConstraint::Full).resized(SizeConstraint::Free, height)
+		self
+			.resized(SizeConstraint::Full, SizeConstraint::Full)
+			.resized(SizeConstraint::Free, height)
 	}
 }
 
@@ -72,7 +103,10 @@ impl<T> ResizableWeak for T where T: Boxable {}
 trait Panelable: View {
 	// returns the self in a double resized view wrapper, which forces the `self` to request space (but not force it)
 	// up until it's SizeConstraint limit.
-	fn in_panel(self) -> Panel<Self> where Self: Sized {
+	fn in_panel(self) -> Panel<Self>
+	where
+		Self: Sized,
+	{
 		Panel::new(self)
 	}
 }
@@ -88,19 +122,32 @@ fn get_client() -> &'static reqwest::blocking::Client {
 		CLIENT.as_ref().unwrap()
 	}
 }
-	
+
 #[allow(dead_code)]
 fn watch_threads(thread_list: Arc<Mutex<Vec<ThreadConfig>>>) -> ! {
 	println!("Watch daemon started with these threads:");
 	for config in (*thread_list).lock().unwrap().iter() {
-		println!("Thread \"{}\" in board \"{}\" with name \"{}\"", config.id, config.board, config.name);
+		println!(
+			"Thread \"{}\" in board \"{}\" with name \"{}\"",
+			config.id, config.board, config.name
+		);
 	}
 	loop {
 		for mut thread_cfg in (*thread_list).lock().unwrap().iter_mut() {
-			let req = get_client().get(format!("https://a.4cdn.org/{}/thread/{}.json", thread_cfg.board, thread_cfg.id))
-					.header("If-Modified-Since", thread_cfg.last_modified.to_rfc2822().replace("+0000", "GMT"))
-					.build()
-					.expect("Failed to build request");
+			let req = get_client()
+				.get(format!(
+					"https://a.4cdn.org/{}/thread/{}.json",
+					thread_cfg.board, thread_cfg.id
+				))
+				.header(
+					"If-Modified-Since",
+					thread_cfg
+						.last_modified
+						.to_rfc2822()
+						.replace("+0000", "GMT"),
+				)
+				.build()
+				.expect("Failed to build request");
 			let resp = get_client().execute(req).expect("Error requesting page");
 			if let Ok(thread) = resp.json::<Thread>() {
 				for post in thread.posts.iter() {
@@ -111,20 +158,20 @@ fn watch_threads(thread_list: Arc<Mutex<Vec<ThreadConfig>>>) -> ! {
 			}
 			thread_cfg.last_modified = Utc::now();
 			// avoid spamming the API
-			thread::sleep(Duration::from_secs(1));	
+			thread::sleep(Duration::from_secs(1));
 		}
 		thread::sleep(Duration::from_secs(20));
 	}
 }
 
 struct Divider {
-	orientation: Orientation
+	orientation: Orientation,
 }
 
 #[allow(dead_code)]
 impl Divider {
 	pub fn new(orientation: Orientation) -> Divider {
-		Divider {orientation}
+		Divider { orientation }
 	}
 	pub fn horizontal() -> Divider {
 		Self::new(Orientation::Horizontal)
@@ -149,14 +196,14 @@ struct SettingsAndData {
 	// settings
 	show_nsfw: bool,
 	// data
-	boards: BoardsResponse,
+	boards:    BoardsResponse,
 }
 
 fn main() {
 	let mut siv = cursive::default();
 
 	let settings = Rc::new(RefCell::new(SettingsAndData {
-		boards: load_4chan_boards(),
+		boards:    load_4chan_boards(),
 		show_nsfw: false,
 	}));
 
@@ -164,56 +211,64 @@ fn main() {
 
 	// load user theme TODO: load theme from file instead of hardcoded
 	siv.update_theme(|theme| {
-		theme.palette.set_color("background", Color::Dark(BaseColor::Black));
-		theme.palette.set_color("view", Color::Dark(BaseColor::Black));
-		theme.palette.set_color("primary", Color::Light(BaseColor::White));
-		theme.palette.set_color("secondary", Color::Light(BaseColor::Blue));
-		theme.palette.set_color("tertiary", Color::Light(BaseColor::Red));
+		let palette = &mut theme.palette;
+		palette.set_color("background", Color::Dark(BaseColor::Black));
+		palette.set_color("view", Color::Dark(BaseColor::Black));
+		palette.set_color("primary", Color::Light(BaseColor::White));
+		palette.set_color("secondary", Color::Light(BaseColor::Blue));
+		palette.set_color("tertiary", Color::Light(BaseColor::Red));
+
 		theme.shadow = false;
 	});
 	let board_view = create_board_view(&mut siv).in_panel();
-	siv.add_fullscreen_layer(LinearLayout::horizontal()
-		.child(board_view)
-		.child(LinearLayout::vertical()
-			.child(ResizedView::with_full_screen(TextView::new("Hello, Other Panel!").with_name("Board")))
-			.child(Divider::horizontal())
-			.child(TextView::new("Panels are interesting!").resized_weak_h(SizeConstraint::AtMost(4)))
-			.in_panel()
-		)
+	siv.add_fullscreen_layer(
+		LinearLayout::horizontal()
+			.child(board_view)
+			.child(LinearLayout::vertical()
+				.child(ResizedView::with_full_screen(
+					TextView::new("Hello, Other Panel!").with_name("Board"),
+				))
+				.child(Divider::horizontal())
+				.child(
+					TextView::new("Panels are interesting!").resized_weak_h(SizeConstraint::AtMost(4)),
+				)
+				.in_panel(),
+		),
 	);
 	siv.set_autohide_menu(false);
 	siv.menubar().add_leaf("Quit", |c| c.quit());
-	siv.menubar().add_subtree("Settings", MenuTree::new().leaf("Show NSFW Boards", move |c| {
-		{
-			let mut settings = (*settings).borrow_mut();
-			if let MenuItem::Leaf(s, _) = c.menubar().get_subtree(1).unwrap().get_mut(0).unwrap() {	
-				if settings.show_nsfw {
-					*s = "Show NSFW Boards".to_string();
+	siv.menubar().add_subtree(
+		"Settings",
+		MenuTree::new().leaf("Show NSFW Boards", move |c| {
+			{
+				let mut settings = (*settings).borrow_mut();
+				if let MenuItem::Leaf(s, _) = c.menubar().get_subtree(1).unwrap().get_mut(0).unwrap() {
+					if settings.show_nsfw {
+						*s = "Show NSFW Boards".to_string();
+					} else {
+						*s = "Hide NSFW Boards".to_string();
+					}
 				} else {
-					*s = "Hide NSFW Boards".to_string();
+					panic!("unknown menu state");
 				}
-			} else {
-				panic!("unknown menu state");
+				settings.show_nsfw = !settings.show_nsfw;
 			}
-			settings.show_nsfw = !settings.show_nsfw;
-		}
-		c.call_on_name("boards_list", |b: &mut SelectView| {
-			b.clear();
-			add_boards_to_select(&(*settings).borrow(), b);
-		});
-	}));
-	siv.menubar().add_leaf("Press [ESC] to access the menu", |_| {});
-	siv.add_global_callback(cursive::event::Key::Esc, |c| {
-		c.select_menubar()
-	});
+			c.call_on_name("boards_list", |b: &mut SelectView| {
+				b.clear();
+				add_boards_to_select(&(*settings).borrow(), b);
+			});
+		}),
+	);
+	siv.menubar()
+		.add_leaf("Press [ESC] to access the menu", |_| {});
+	siv.add_global_callback(cursive::event::Key::Esc, |c| c.select_menubar());
 	// register a global callback listener to listen for input events that aren't handled and check if the board list is focused
-	// if it is, we'll go to the next
-
+	// if it is, we'll go to the next board with a slug that starts with the pressed key
+	// TODO: actually do that ^
 	siv.run();
 }
 
 fn create_board_view(c: &mut Cursive) -> impl View {
-
 	let mut layout = SelectView::new();
 
 	add_boards_to_select(&get_boards(c).unwrap(), &mut layout);
@@ -229,19 +284,27 @@ fn create_board_view(c: &mut Cursive) -> impl View {
 fn add_boards_to_select(settings: &SettingsAndData, layout: &mut SelectView) {
 	for board in settings.boards.boards.iter() {
 		if settings.show_nsfw || board.sfw {
-			layout.add_item(format!("/{}/: {}", board.board, board.title), board.board.clone());
-		} 
+			layout.add_item(
+				format!("/{}/: {}", board.board, board.title),
+				board.board.clone(),
+			);
+		}
 	}
 }
 
 
 fn load_4chan_boards() -> BoardsResponse {
-	let req = get_client().get("https://a.4cdn.org/boards.json")
+	let req = get_client()
+		.get("https://a.4cdn.org/boards.json")
 		.build()
 		.expect("Failed to build boards list request");
-	let resp = get_client().execute(req).expect("Error requesting boards list");
+	let resp = get_client()
+		.execute(req)
+		.expect("Error requesting boards list");
 
-	resp.json::<BoardsResponse>().expect("Failed to parse boards list")
+	resp
+		.json::<BoardsResponse>()
+		.expect("Failed to parse boards list")
 }
 
 
