@@ -242,7 +242,7 @@ fn load_4chan_boards() -> BoardsResponse {
 
 fn get_boards(c: &mut Cursive) -> Option<impl Deref<Target = SettingsAndData> + '_> {
 	if let Some(settings) = c.user_data::<Rc<RefCell<SettingsAndData>>>() {
-		Some((**settings).borrow())
+		(**settings).try_borrow().ok()
 	} else {
 		None
 	}
