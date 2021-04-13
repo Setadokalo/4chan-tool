@@ -1,20 +1,24 @@
-use std::{cell::RefCell,
-          ops::Deref,
-          rc::Rc,
-          sync::{Arc, Mutex, Once},
-          thread,
-          time::Duration};
+use std::{
+	cell::RefCell,
+	ops::Deref,
+	rc::Rc,
+	sync::{Arc, Mutex, Once},
+	thread,
+	time::Duration,
+};
 
 use chan_data::{BoardsResponse, Thread};
 use chrono::Utc;
 use config::ThreadConfig;
-use cursive::{direction::Orientation,
-              menu::{MenuItem, MenuTree},
-              theme::{BaseColor, Color},
-              traits::*,
-              view::SizeConstraint,
-              views::{LinearLayout, Panel, ResizedView, SelectView, TextView},
-              Cursive, Vec2, View};
+use cursive::{
+	direction::Orientation,
+	menu::{MenuItem, MenuTree},
+	theme::{BaseColor, Color},
+	traits::*,
+	view::SizeConstraint,
+	views::{LinearLayout, Panel, ResizedView, ScrollView, SelectView, TextView},
+	Cursive, Vec2, View,
+};
 
 mod chan_data;
 
@@ -196,14 +200,14 @@ struct SettingsAndData {
 	// settings
 	show_nsfw: bool,
 	// data
-	boards:    BoardsResponse,
+	boards: BoardsResponse,
 }
 
 fn main() {
 	let mut siv = cursive::default();
 
 	let settings = Rc::new(RefCell::new(SettingsAndData {
-		boards:    load_4chan_boards(),
+		boards: load_4chan_boards(),
 		show_nsfw: false,
 	}));
 
@@ -229,11 +233,12 @@ fn main() {
 					TextView::new("Hello, Other Panel!").with_name("Board"),
 				))
 				.child(Divider::horizontal())
-				.child(
-					TextView::new("Panels are interesting!").resized_weak_h(SizeConstraint::AtMost(4)),
+				.child(TextView::new("Panels are interesting!")
+					.resized_weak_h(SizeConstraint::AtMost(4)),
 				)
 				.in_panel(),
-		),
+			)
+			.with_name("root_layout"),
 	);
 	siv.set_autohide_menu(false);
 	siv.menubar().add_leaf("Quit", |c| c.quit());
@@ -253,18 +258,77 @@ fn main() {
 				}
 				settings.show_nsfw = !settings.show_nsfw;
 			}
-			c.call_on_name("boards_list", |b: &mut SelectView| {
-				b.clear();
-				add_boards_to_select(&(*settings).borrow(), b);
-			});
+			c.call_on_name(
+				"boards_list",
+				|b_scrollable: &mut ScrollView<SelectView>| {
+					let b = b_scrollable.get_inner_mut();
+					b.clear();
+					add_boards_to_select(&(*settings).borrow(), b);
+				},
+			);
 		}),
 	);
 	siv.menubar()
 		.add_leaf("Press [ESC] to access the menu", |_| {});
 	siv.add_global_callback(cursive::event::Key::Esc, |c| c.select_menubar());
+	
 	// register a global callback listener to listen for input events that aren't handled and check if the board list is focused
 	// if it is, we'll go to the next board with a slug that starts with the pressed key
-	// TODO: actually do that ^
+
+	// Cursive doesn't allow setting a callback on every char automatically, so we have to use this workaround
+	// where we iterate through all alphanumeric chars and add a specialized callback for them
+	for ch in ('a'..'z').chain('0'..'9') {
+		siv.add_global_callback(ch, move |c| {
+			// the SelectView will return a callback when it's focus is changed, but it can't be executed immediately
+			// because the &mut Cursive (`c`) is in use (for the .call_on_name() it's occuring in).
+			// So we store the callback here and call it after the call_on_name() returns.
+			let mut cb = None;
+			// Cursive also has no way of identifying what element has focus easily, so we use this workaround
+			// where we check which of the root layout's children has focus instead
+			c.call_on_name("root_layout", |root: &mut LinearLayout| {
+				if root.get_focus_index() == root.find_child_from_name("boards_list").unwrap() {
+					// if it DOES have focus, finally we can actually run the selection logic
+					root.call_on_name(
+						"boards_list",
+						|scrollable_board_list: &mut ScrollView<SelectView>| {
+							let bl = scrollable_board_list.get_inner_mut();
+							// the selected child of the boards list
+							let bl_focus = bl.selected_id().unwrap();
+							let i = {
+								// * Starting from the current focus, find the first item that
+								//   match the char.
+								// * Cycle back to the beginning of the list when we reach the end.
+								// * This is achieved by chaining twice the iterator.
+								let iter = bl.iter().chain(bl.iter());
+
+								if let Some((i, _)) =
+									iter
+										.enumerate()
+										.skip(bl_focus + 1)
+										.find(|&(_, (label, _))| {
+											label
+												.to_lowercase()
+												.splitn(2, "/")
+												.nth(1)
+												.unwrap()
+												.starts_with(ch)
+										}) {
+									i % bl.len()
+								} else {
+									bl_focus
+								}
+							};
+							cb = Some(bl.set_selection(i));
+							scrollable_board_list.scroll_to_important_area()
+						},
+					);
+				}
+			});
+			if let Some(cb) = cb {
+				cb(c);
+			}
+		});
+	}
 	siv.run();
 }
 
@@ -278,7 +342,7 @@ fn create_board_view(c: &mut Cursive) -> impl View {
 			view.set_content(format!("User selected panel {}", item))
 		});
 	});
-	layout.with_name("boards_list").scrollable()
+	layout.scrollable().with_name("boards_list")
 }
 
 fn add_boards_to_select(settings: &SettingsAndData, layout: &mut SelectView) {
@@ -291,7 +355,6 @@ fn add_boards_to_select(settings: &SettingsAndData, layout: &mut SelectView) {
 		}
 	}
 }
-
 
 fn load_4chan_boards() -> BoardsResponse {
 	let req = get_client()
@@ -306,7 +369,6 @@ fn load_4chan_boards() -> BoardsResponse {
 		.json::<BoardsResponse>()
 		.expect("Failed to parse boards list")
 }
-
 
 fn get_boards(c: &mut Cursive) -> Option<impl Deref<Target = SettingsAndData> + '_> {
 	if let Some(settings) = c.user_data::<Rc<RefCell<SettingsAndData>>>() {
