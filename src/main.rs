@@ -213,6 +213,7 @@ struct SettingsAndData {
 	show_nsfw: bool,
 	// data
 	boards: BoardsResponse,
+	scale_mode: FilterType,
 }
 
 fn main() {
@@ -221,6 +222,7 @@ fn main() {
 	let settings = Rc::new(RefCell::new(SettingsAndData {
 		boards: load_4chan_boards(),
 		show_nsfw: false,
+		scale_mode: FilterType::Triangle,
 	}));
 
 	siv.set_user_data(settings.clone());
@@ -280,7 +282,25 @@ fn main() {
 					add_boards_to_select(&(*settings).borrow(), b);
 				},
 			);
-		}),
+		}).subtree(
+			"Scale Mode", 
+			MenuTree::new()
+				.leaf("Nearest Neighbor", |c| {
+					c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = FilterType::Nearest;
+				})
+				.leaf("Linear", |c| {
+					c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = FilterType::Triangle;
+				})
+				.leaf("Cubic", |c| {
+					c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = FilterType::CatmullRom;
+				})
+				.leaf("Gaussian", |c| {
+					c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = FilterType::Gaussian;
+				})
+				.leaf("Lanczos", |c| {
+					c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = FilterType::Lanczos3;
+				})
+		),
 	);
 	siv.menubar()
 		.add_leaf("Press [ESC] to access the menu", |_| {});
@@ -352,16 +372,16 @@ fn create_board_view(c: &mut Cursive) -> impl View {
 	add_boards_to_select(&get_boards(c).unwrap(), &mut layout);
 
 	layout.set_on_submit(|c, board: &String| {
+		let scale_method =  c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow().scale_mode;
 		c.call_on_name("threads_list", |view: &mut LinearLayout| {
 			while view.get_child(0).is_some() { view.remove_child(0); };
 			let threads = get_threads_for_board(board);
 			let mut iter = threads.iter().enumerate().peekable();
-			
 			let create_and_add_thread_panel = |view: &mut LinearLayout, op: &Post| {
 				let mut thread_panel = LinearLayout::horizontal();
 				if let Some(attachment) = &op.attachment {
 					if !attachment.filedeleted {
-						thread_panel.add_child(ImageView::new(format!("https://i.4cdn.org/{}/{}s.jpg", board, &attachment.tim), Vec2::new(20, 10)));
+						thread_panel.add_child(ImageView::new(format!("https://i.4cdn.org/{}/{}s.jpg", board, &attachment.tim), Vec2::new(20, 10), scale_method));
 					}
 				}
 				thread_panel.add_child(Button::new(op.op.as_ref().unwrap().sub.as_ref().unwrap_or(&"Thread".to_string()), |c| {}));
@@ -422,7 +442,7 @@ struct ImageView {
 }
 
 impl ImageView {
-	pub fn new<'a>(url: impl AsRef<str>, dims: impl Into<Vec2>) -> ImageView {
+	pub fn new<'a>(url: impl AsRef<str>, dims: impl Into<Vec2>, scale_method: FilterType) -> ImageView {
 		let dims = dims.into();
 		let req = get_client()
 			.get(url.as_ref())
@@ -434,7 +454,7 @@ impl ImageView {
 		let bytes = resp.bytes().unwrap();
 		
 		let img = decode_image(bytes.as_ref());
-		let ascii_img = Self::convert_img_to_ascii(&img,  dims);
+		let ascii_img = Self::convert_img_to_ascii(&img, dims, scale_method);
 		let size = Vec2::new(ascii_img[0].width(), ascii_img.len());
 		ImageView {
 			ascii_img,
@@ -443,8 +463,8 @@ impl ImageView {
 		// img.get_pixel(0, 0);
 	}
 	
-	fn convert_img_to_ascii(img: &DynamicImage, dims: Vec2) -> Vec<StyledString> {
-		let resized = img.resize(dims.x as u32, dims.y as u32 * 2, FilterType::Nearest);
+	fn convert_img_to_ascii(img: &DynamicImage, dims: Vec2, scale_method: FilterType) -> Vec<StyledString> {
+		let resized = img.resize(dims.x as u32, dims.y as u32 * 2,scale_method);
 		let mut output = Vec::new();
 		for y in 0..resized.height()/2 {
 			let mut builder = StyledString::new();
