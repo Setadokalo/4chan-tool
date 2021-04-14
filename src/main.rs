@@ -1,24 +1,14 @@
-use std::{
-	cell::RefCell,
-	ops::Deref,
-	rc::Rc,
-	sync::{Arc, Mutex, Once},
-	thread,
-	time::Duration,
-};
+use std::{cell::RefCell, io::Read, ops::Deref, rc::Rc, sync::{Arc, Mutex, Once}, thread, time::Duration};
 
-use chan_data::{BoardsResponse, Thread};
+use image::{DynamicImage, GenericImageView, ImageBuffer, ImageDecoder, ImageFormat, Pixel, Rgb, RgbImage, Rgba, imageops::FilterType, io::Reader as ImageReader, png::{PngDecoder, PngReader}};
+use serde::{Deserialize, Serialize};
+use string_builder::Builder as StringBuilder;
+
+use chan_data::{BoardsResponse, Post, Thread};
 use chrono::Utc;
 use config::ThreadConfig;
-use cursive::{
-	direction::Orientation,
-	menu::{MenuItem, MenuTree},
-	theme::{BaseColor, Color},
-	traits::*,
-	view::SizeConstraint,
-	views::{LinearLayout, Panel, ResizedView, ScrollView, SelectView, TextView},
-	Cursive, Vec2, View,
-};
+use cursive::{Cursive, Vec2, View, direction::Orientation, menu::{MenuItem, MenuTree}, theme::{BaseColor, Color, ColorStyle, ColorType, Effect, Style}, traits::*, utils::markup::StyledString, view::SizeConstraint, views::{Button, LinearLayout, Panel, ResizedView, ScrollView, SelectView, TextView}};
+use enumset::EnumSet;
 
 mod chan_data;
 
@@ -77,6 +67,7 @@ mod config {
 	}
 }
 
+
 trait ResizableWeak: Boxable {
 	/// returns the self in a double resized view wrapper, which forces the `self` to request space (but not force it)
 	/// up until it's SizeConstraint limit.
@@ -125,6 +116,27 @@ fn get_client() -> &'static reqwest::blocking::Client {
 		CLIENT_ONCE.call_once(|| CLIENT = Some(reqwest::blocking::Client::new()));
 		CLIENT.as_ref().unwrap()
 	}
+}
+
+fn get_threads_for_board(board: impl Into<String>) -> Vec<Post> {
+	#[derive(Serialize, Deserialize)]
+
+	struct CatalogPage {
+		page: usize,
+		threads: Vec<Post>,
+	}
+	let req = get_client()
+		.get(format!("https://a.4cdn.org/{}/catalog.json", board.into()))
+		.build()
+		.expect("Failed to build threads list request");
+	let resp = get_client()
+		.execute(req)
+		.expect("Error requesting threads list");
+
+	resp
+		.json::<Vec<CatalogPage>>()
+		.expect("Failed to parse threads list")
+		.remove(0).threads
 }
 
 #[allow(dead_code)]
@@ -230,12 +242,14 @@ fn main() {
 			.child(board_view)
 			.child(LinearLayout::vertical()
 				.child(ResizedView::with_full_screen(
-					TextView::new("Hello, Other Panel!").with_name("Board"),
+					TextView::new("Hello, Other Panel!"),
 				))
 				.child(Divider::horizontal())
 				.child(TextView::new("Panels are interesting!")
 					.resized_weak_h(SizeConstraint::AtMost(4)),
 				)
+				.with_name("threads_list")
+				.scrollable()
 				.in_panel(),
 			)
 			.with_name("root_layout"),
@@ -337,9 +351,32 @@ fn create_board_view(c: &mut Cursive) -> impl View {
 
 	add_boards_to_select(&get_boards(c).unwrap(), &mut layout);
 
-	layout.set_on_submit(|c, item: &String| {
-		c.call_on_name("Board", |view: &mut TextView| {
-			view.set_content(format!("User selected panel {}", item))
+	layout.set_on_submit(|c, board: &String| {
+		c.call_on_name("threads_list", |view: &mut LinearLayout| {
+			while view.get_child(0).is_some() { view.remove_child(0); };
+			let threads = get_threads_for_board(board);
+			let mut iter = threads.iter().enumerate().peekable();
+			
+			let create_and_add_thread_panel = |view: &mut LinearLayout, op: &Post| {
+				let mut thread_panel = LinearLayout::horizontal();
+				if let Some(attachment) = &op.attachment {
+					if !attachment.filedeleted {
+						thread_panel.add_child(ImageView::new(format!("https://i.4cdn.org/{}/{}s.jpg", board, &attachment.tim), Vec2::new(20, 10)));
+					}
+				}
+				thread_panel.add_child(Button::new(op.op.as_ref().unwrap().sub.as_ref().unwrap_or(&"Thread".to_string()), |c| {}));
+				view.add_child(thread_panel);
+			};
+
+			if let Some((_, post)) = iter.next() {
+				create_and_add_thread_panel(view, post);
+			}
+
+			for (i, thread) in iter {
+				view.add_child(Divider::horizontal());
+				// if i > 5 {break} // TODO: Remove this
+				create_and_add_thread_panel(view, thread);
+			}
 		});
 	});
 	layout.scrollable().with_name("boards_list")
@@ -376,4 +413,75 @@ fn get_boards(c: &mut Cursive) -> Option<impl Deref<Target = SettingsAndData> + 
 	} else {
 		None
 	}
+}
+
+
+struct ImageView {
+	ascii_img: Vec<StyledString>,
+	size: Vec2,
+}
+
+impl ImageView {
+	pub fn new<'a>(url: impl AsRef<str>, dims: impl Into<Vec2>) -> ImageView {
+		let dims = dims.into();
+		let req = get_client()
+			.get(url.as_ref())
+			.build()
+			.expect("Failed to build boards list request");
+		let resp = get_client()
+			.execute(req)
+			.expect("Error requesting boards list");
+		let bytes = resp.bytes().unwrap();
+		
+		let img = decode_image(bytes.as_ref());
+		let ascii_img = Self::convert_img_to_ascii(&img,  dims);
+		let size = Vec2::new(ascii_img[0].width(), ascii_img.len());
+		ImageView {
+			ascii_img,
+			size,
+		}
+		// img.get_pixel(0, 0);
+	}
+	
+	fn convert_img_to_ascii(img: &DynamicImage, dims: Vec2) -> Vec<StyledString> {
+		let resized = img.resize(dims.x as u32, dims.y as u32 * 2, FilterType::Nearest);
+		let mut output = Vec::new();
+		for y in 0..resized.height()/2 {
+			let mut builder = StyledString::new();
+			for x in 0..resized.width() {
+				let top_pixel = resized.get_pixel(x, y * 2);
+				let top_chnls = top_pixel.channels();
+				let bottom_pixel = resized.get_pixel(x, y * 2 + 1);
+				let bottom_chnls = bottom_pixel.channels();
+				let mut style = Style::none();
+				style.color = ColorStyle::new(
+					ColorType::Color(Color::Rgb(bottom_chnls[0], bottom_chnls[1], bottom_chnls[2])), 
+					ColorType::Color(Color::Rgb(top_chnls[0], top_chnls[1], top_chnls[2]))
+				);
+				builder.append_styled('▄', style);
+			}
+			output.push(builder)
+		}
+		output
+	}
+
+}
+
+impl View for ImageView {
+	fn draw(&self, printer: &cursive::Printer) {
+		for y in 0..printer.output_size.y {
+			if let Some(line) = self.ascii_img.get(y) {
+				printer.print_styled((0, y), line.into());
+			}
+		}
+	}
+	
+	fn required_size(&mut self, _constraint: Vec2) -> Vec2 {
+		self.size
+	}
+}
+
+
+fn decode_image(buffer: &[u8]) -> DynamicImage {
+	image::load_from_memory(buffer).unwrap()
 }

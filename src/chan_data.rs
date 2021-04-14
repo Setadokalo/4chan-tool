@@ -1,11 +1,11 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::{collections::HashMap, fmt::Debug};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Thread {
 	pub posts: Vec<Post>,
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Post {
 	#[serde(flatten)]
 	pub op:           Option<OpData>, // contains data specific to the OP if this post is the OP
@@ -13,7 +13,7 @@ pub struct Post {
 	pub resto:        isize,          // ID of the thread (or 0 if this is the OP)
 	pub now:          String,
 	pub time:         isize,          // time post was created
-	pub name:         String,         // user name
+	pub name:         Option<String>,         // user name
 	pub trip:         Option<String>, // user tripcode, whatever that is
 	pub id:           Option<String>, // user ID?
 	pub capcode:      Option<String>, // post capcode, whatever that is
@@ -27,7 +27,7 @@ pub struct Post {
 	pub m_img:        bool,           // if post has mobile optimized image
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AttachmentData {
 	pub tim: isize,        // image upload timestamp
 	pub filename: String,  // file name
@@ -45,29 +45,29 @@ pub struct AttachmentData {
 	pub custom_spoiler: Option<isize>, // custom spoiler ID
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OpData {
 	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	sticky:       bool,           // if the thread is pinned
+	pub sticky:       bool,           // if the thread is pinned
 	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	closed:       bool,           // if the thread is closed to replies
-	sub:          Option<String>, // subject text
-	replies:      isize,          // total number of replies
-	images:       isize,          // total number of image replies
+	pub closed:       bool,           // if the thread is closed to replies
+	pub sub:          Option<String>, // subject text
+	pub replies:      isize,          // total number of replies
+	pub images:       isize,          // total number of image replies
 	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	bumplimit:    bool,           // if the thread has reached the bump limit
+	pub bumplimit:    bool,           // if the thread has reached the bump limit
 	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	imagelimit:   bool,           // if the thread has reached the image limit
-	tag:          Option<String>, // (/f/ only) category of the .swf upload
-	semantic_url: String,         // SEO URL slug for thread
-	unique_ips:   Option<isize>,  // Number of unique posters in thread
+	pub imagelimit:   bool,           // if the thread has reached the image limit
+	pub tag:          Option<String>, // (/f/ only) category of the .swf upload
+	pub semantic_url: String,         // SEO URL slug for thread
+	pub unique_ips:   Option<isize>,  // Number of unique posters in thread
 
 	#[serde(default, deserialize_with = "opt_int_to_bool")]
-	archived:    bool,            // if the thread has been archived
-	archived_on: Option<isize>,   // archived date
+	pub archived:    bool,            // if the thread has been archived
+	pub archived_on: Option<isize>,   // archived date
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Board {
 	pub board: String,
 	pub title: String,
