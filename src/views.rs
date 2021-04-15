@@ -1,5 +1,6 @@
+use wasmer_enumset::EnumSet;
 use image::{DynamicImage, GenericImageView, Pixel, imageops::FilterType};
-use cursive::{Vec2, View, direction::Orientation, theme::{Color, ColorStyle, ColorType, Style}, utils::markup::StyledString};
+use cursive::{Vec2, View, direction::Orientation, theme::{Color, ColorStyle, ColorType, Effect, Style}, utils::markup::StyledString};
 
 use crate::get_client;
 
@@ -41,11 +42,12 @@ impl ImageView {
 				let top_chnls = top_pixel.channels();
 				let bottom_pixel = resized.get_pixel(x, y * 2 + 1);
 				let bottom_chnls = bottom_pixel.channels();
-				let mut style = Style::none();
-				style.color = ColorStyle::new(
+				let style = Style{
+					effects: EnumSet::new(),
+					color: ColorStyle::new(
 					ColorType::Color(Color::Rgb(bottom_chnls[0], bottom_chnls[1], bottom_chnls[2])), 
 					ColorType::Color(Color::Rgb(top_chnls[0], top_chnls[1], top_chnls[2]))
-				);
+				)};
 				builder.append_styled('▄', style);
 			}
 			output.push(builder)
@@ -60,11 +62,14 @@ impl View for ImageView {
 		for y in 0..printer.output_size.y {
 			if let Some(line) = self.ascii_img.get(y) {
 				printer.print_styled((0, y), line.into());
+			} else {
+				// printer is bigger than our image; no further lines will be valid
+				return;
 			}
 		}
 	}
 	
-	fn required_size(&mut self, _constraint: Vec2) -> Vec2 {
+	fn required_size(&mut self, _: Vec2) -> Vec2 {
 		self.size
 	}
 }

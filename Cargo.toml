@@ -14,4 +14,4 @@ serde_json = "1.0"
 cursive = {version = "0.16", default-features = false, features = ["crossterm-backend"]}
 image = "0.23"
 string-builder = "0.2.0"
-enumset = "1.0"
+wasmer_enumset = "1.0"

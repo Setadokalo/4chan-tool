@@ -266,35 +266,7 @@ fn add_board_key_nav_callbacks(siv: &mut Cursive) {
 					root.call_on_name(
 						"boards_list",
 						|scrollable_board_list: &mut ScrollView<SelectView>| {
-							let bl = scrollable_board_list.get_inner_mut();
-							// the selected child of the boards list
-							let bl_focus = bl.selected_id().unwrap();
-							let i = {
-								// * Starting from the current focus, find the first item that
-								//   match the char.
-								// * Cycle back to the beginning of the list when we reach the end.
-								// * This is achieved by chaining twice the iterator.
-								let iter = bl.iter().chain(bl.iter());
-
-								if let Some((i, _)) =
-									iter
-										.enumerate()
-										.skip(bl_focus + 1)
-										.find(|&(_, (label, _))| {
-											label
-												.to_lowercase()
-												.splitn(2, "/")
-												.nth(1)
-												.unwrap()
-												.starts_with(ch)
-										}) {
-									i % bl.len()
-								} else {
-									bl_focus
-								}
-							};
-							cb = Some(bl.set_selection(i));
-							scrollable_board_list.scroll_to_important_area()
+							scroll_to_matching_board(scrollable_board_list, ch, &mut cb)
 						},
 					);
 				}
@@ -306,6 +278,35 @@ fn add_board_key_nav_callbacks(siv: &mut Cursive) {
 	}
 }
 
+fn scroll_to_matching_board(scrollable_board_list: &mut ScrollView<SelectView>, ch: char, cb: &mut Option<cursive::event::Callback>) -> cursive::event::EventResult {
+    let bl = scrollable_board_list.get_inner_mut();
+    let bl_focus = bl.selected_id().unwrap();
+    let i = {
+		// Starting from the current focus, find the first item that
+		//   matches the char.
+		// Cycle back to the beginning of the list when we reach the end.
+		// This is achieved by chaining the iterator.
+		let mut iter = bl.iter()
+			.skip(bl_focus + 1)
+			.chain(bl.iter())
+			.enumerate();
+
+		if let Some((i, _)) =
+			iter.find(|&(_, (label, _))| {
+				label
+					.to_lowercase()
+					.trim_start_matches("/")
+					.starts_with(ch)
+				}) {
+			i % bl.len()
+		} else {
+			bl_focus
+		}
+	};
+    *cb = Some(bl.set_selection(i));
+    scrollable_board_list.scroll_to_important_area()
+}
+
 /// Creates a LinearLayout for
 fn create_and_add_thread_panel(op: &Post, board: impl AsRef<str>, img_scale_method: FilterType) -> LinearLayout {
 	let mut thread_panel = LinearLayout::horizontal();
@@ -315,7 +316,7 @@ fn create_and_add_thread_panel(op: &Post, board: impl AsRef<str>, img_scale_meth
 		}
 	}
 	//TODO: implement thread viewing
-	thread_panel.add_child(Button::new(op.op.as_ref().unwrap().sub.as_ref().unwrap_or(&"Thread".to_string()), |_| {}));
+	thread_panel.add_child(Button::new_raw(op.op.as_ref().unwrap().sub.as_ref().unwrap_or(&"Thread".to_string()), |_| {}));
 	
 	thread_panel
 }
