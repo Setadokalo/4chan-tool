@@ -1,5 +1,5 @@
 [package]
-name = "config-parser"
+name = "fourchan-tui"
 version = "0.1.0"
 authors = ["Setadokalo <darkenchanter1@gmail.com>"]
 edition = "2018"

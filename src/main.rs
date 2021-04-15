@@ -1,16 +1,19 @@
-use std::{cell::RefCell, io::Read, ops::Deref, rc::Rc, sync::{Arc, Mutex, Once}, thread, time::Duration};
+use std::{cell::RefCell, ops::Deref, rc::Rc, sync::{Arc, Mutex, Once}, thread, time::Duration};
 
-use image::{DynamicImage, GenericImageView, ImageBuffer, ImageDecoder, ImageFormat, Pixel, Rgb, RgbImage, Rgba, imageops::FilterType, io::Reader as ImageReader, png::{PngDecoder, PngReader}};
+use image::imageops::FilterType;
 use serde::{Deserialize, Serialize};
-use string_builder::Builder as StringBuilder;
+
 
 use chan_data::{BoardsResponse, Post, Thread};
 use chrono::Utc;
 use config::ThreadConfig;
-use cursive::{Cursive, Vec2, View, direction::Orientation, menu::{MenuItem, MenuTree}, theme::{BaseColor, Color, ColorStyle, ColorType, Effect, Style}, traits::*, utils::markup::StyledString, view::SizeConstraint, views::{Button, LinearLayout, Panel, ResizedView, ScrollView, SelectView, TextView}};
-use enumset::EnumSet;
+use cursive::{Cursive, Vec2, View, menu::{MenuItem, MenuTree}, theme::{BaseColor, Color}, traits::*, view::SizeConstraint, views::{Button, LinearLayout, ResizedView, ScrollView, SelectView, TextView}};
+
 
 mod chan_data;
+mod views;
+
+use views::{Divider, ImageView, traits::{Panelable, ResizableWeak}};
 
 mod config {
 	use std::fmt::Debug;
@@ -68,46 +71,6 @@ mod config {
 }
 
 
-trait ResizableWeak: Boxable {
-	/// returns the self in a double resized view wrapper, which forces the `self` to request space (but not force it)
-	/// up until it's SizeConstraint limit.
-	fn resized_weak(
-		self,
-		width: SizeConstraint,
-		height: SizeConstraint,
-	) -> ResizedView<ResizedView<Self>> {
-		self
-			.resized(SizeConstraint::Full, SizeConstraint::Full)
-			.resized(width, height)
-	}
-	/// same as `resized_weak`, but automatically uses `SizeConstraint::Free` for the height
-	fn resized_weak_w(self, width: SizeConstraint) -> ResizedView<ResizedView<Self>> {
-		self
-			.resized(SizeConstraint::Full, SizeConstraint::Full)
-			.resized(width, SizeConstraint::Free)
-	}
-	/// same as `resized_weak`, but automatically uses `SizeConstraint::Free` for the width
-	fn resized_weak_h(self, height: SizeConstraint) -> ResizedView<ResizedView<Self>> {
-		self
-			.resized(SizeConstraint::Full, SizeConstraint::Full)
-			.resized(SizeConstraint::Free, height)
-	}
-}
-
-impl<T> ResizableWeak for T where T: Boxable {}
-trait Panelable: View {
-	// returns the self in a double resized view wrapper, which forces the `self` to request space (but not force it)
-	// up until it's SizeConstraint limit.
-	fn in_panel(self) -> Panel<Self>
-	where
-		Self: Sized,
-	{
-		Panel::new(self)
-	}
-}
-
-impl<T> Panelable for T where T: View {}
-
 static mut CLIENT: Option<reqwest::blocking::Client> = None;
 static CLIENT_ONCE: Once = Once::new();
 
@@ -117,7 +80,6 @@ fn get_client() -> &'static reqwest::blocking::Client {
 		CLIENT.as_ref().unwrap()
 	}
 }
-
 fn get_threads_for_board(board: impl Into<String>) -> Vec<Post> {
 	#[derive(Serialize, Deserialize)]
 
@@ -180,33 +142,6 @@ fn watch_threads(thread_list: Arc<Mutex<Vec<ThreadConfig>>>) -> ! {
 	}
 }
 
-struct Divider {
-	orientation: Orientation,
-}
-
-#[allow(dead_code)]
-impl Divider {
-	pub fn new(orientation: Orientation) -> Divider {
-		Divider { orientation }
-	}
-	pub fn horizontal() -> Divider {
-		Self::new(Orientation::Horizontal)
-	}
-	pub fn vertical() -> Divider {
-		Self::new(Orientation::Vertical)
-	}
-}
-
-impl View for Divider {
-	fn draw(&self, printer: &cursive::Printer) {
-		if self.orientation == Orientation::Horizontal {
-			//  panic!("{}, {:?}, {:?}", std::iter::repeat("X").take(printer.size.y).collect::<String>(), printer.offset, printer.size);
-			printer.print_hline(Vec2::zero(), printer.size.x, "-");
-		} else {
-			printer.print_vline(Vec2::zero(), printer.size.y, "|")
-		}
-	}
-}
 
 struct SettingsAndData {
 	// settings
@@ -306,6 +241,12 @@ fn main() {
 		.add_leaf("Press [ESC] to access the menu", |_| {});
 	siv.add_global_callback(cursive::event::Key::Esc, |c| c.select_menubar());
 	
+	add_board_key_nav_callbacks(&mut siv);
+	
+	siv.run();
+}
+
+fn add_board_key_nav_callbacks(siv: &mut Cursive) {
 	// register a global callback listener to listen for input events that aren't handled and check if the board list is focused
 	// if it is, we'll go to the next board with a slug that starts with the pressed key
 
@@ -363,7 +304,20 @@ fn main() {
 			}
 		});
 	}
-	siv.run();
+}
+
+/// Creates a LinearLayout for
+fn create_and_add_thread_panel(op: &Post, board: impl AsRef<str>, img_scale_method: FilterType) -> LinearLayout {
+	let mut thread_panel = LinearLayout::horizontal();
+	if let Some(attachment) = &op.attachment {
+		if !attachment.filedeleted {
+			thread_panel.add_child(ImageView::new(format!("https://i.4cdn.org/{}/{}s.jpg", board.as_ref(), &attachment.tim), Vec2::new(20, 10), img_scale_method));
+		}
+	}
+	//TODO: implement thread viewing
+	thread_panel.add_child(Button::new(op.op.as_ref().unwrap().sub.as_ref().unwrap_or(&"Thread".to_string()), |_| {}));
+	
+	thread_panel
 }
 
 fn create_board_view(c: &mut Cursive) -> impl View {
@@ -373,29 +327,21 @@ fn create_board_view(c: &mut Cursive) -> impl View {
 
 	layout.set_on_submit(|c, board: &String| {
 		let scale_method =  c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow().scale_mode;
-		c.call_on_name("threads_list", |view: &mut LinearLayout| {
-			while view.get_child(0).is_some() { view.remove_child(0); };
+		c.call_on_name("threads_list", |threads_view: &mut LinearLayout| {
+			//TODO: There's probably a more idiomatic way to clear the LinearLayout
+			while threads_view.get_child(0).is_some() { threads_view.remove_child(0); };
 			let threads = get_threads_for_board(board);
-			let mut iter = threads.iter().enumerate().peekable();
-			let create_and_add_thread_panel = |view: &mut LinearLayout, op: &Post| {
-				let mut thread_panel = LinearLayout::horizontal();
-				if let Some(attachment) = &op.attachment {
-					if !attachment.filedeleted {
-						thread_panel.add_child(ImageView::new(format!("https://i.4cdn.org/{}/{}s.jpg", board, &attachment.tim), Vec2::new(20, 10), scale_method));
-					}
-				}
-				thread_panel.add_child(Button::new(op.op.as_ref().unwrap().sub.as_ref().unwrap_or(&"Thread".to_string()), |c| {}));
-				view.add_child(thread_panel);
-			};
+			let mut iter = threads.iter();
+			
 
-			if let Some((_, post)) = iter.next() {
-				create_and_add_thread_panel(view, post);
+			if let Some(post) = iter.next() {
+				threads_view.add_child(create_and_add_thread_panel(post, board, scale_method));
 			}
 
-			for (i, thread) in iter {
-				view.add_child(Divider::horizontal());
+			for post in iter {
+				threads_view.add_child(Divider::horizontal());
 				// if i > 5 {break} // TODO: Remove this
-				create_and_add_thread_panel(view, thread);
+				threads_view.add_child(create_and_add_thread_panel(post, board, scale_method));
 			}
 		});
 	});
@@ -436,72 +382,3 @@ fn get_boards(c: &mut Cursive) -> Option<impl Deref<Target = SettingsAndData> + 
 }
 
 
-struct ImageView {
-	ascii_img: Vec<StyledString>,
-	size: Vec2,
-}
-
-impl ImageView {
-	pub fn new<'a>(url: impl AsRef<str>, dims: impl Into<Vec2>, scale_method: FilterType) -> ImageView {
-		let dims = dims.into();
-		let req = get_client()
-			.get(url.as_ref())
-			.build()
-			.expect("Failed to build boards list request");
-		let resp = get_client()
-			.execute(req)
-			.expect("Error requesting boards list");
-		let bytes = resp.bytes().unwrap();
-		
-		let img = decode_image(bytes.as_ref());
-		let ascii_img = Self::convert_img_to_ascii(&img, dims, scale_method);
-		let size = Vec2::new(ascii_img[0].width(), ascii_img.len());
-		ImageView {
-			ascii_img,
-			size,
-		}
-		// img.get_pixel(0, 0);
-	}
-	
-	fn convert_img_to_ascii(img: &DynamicImage, dims: Vec2, scale_method: FilterType) -> Vec<StyledString> {
-		let resized = img.resize(dims.x as u32, dims.y as u32 * 2,scale_method);
-		let mut output = Vec::new();
-		for y in 0..resized.height()/2 {
-			let mut builder = StyledString::new();
-			for x in 0..resized.width() {
-				let top_pixel = resized.get_pixel(x, y * 2);
-				let top_chnls = top_pixel.channels();
-				let bottom_pixel = resized.get_pixel(x, y * 2 + 1);
-				let bottom_chnls = bottom_pixel.channels();
-				let mut style = Style::none();
-				style.color = ColorStyle::new(
-					ColorType::Color(Color::Rgb(bottom_chnls[0], bottom_chnls[1], bottom_chnls[2])), 
-					ColorType::Color(Color::Rgb(top_chnls[0], top_chnls[1], top_chnls[2]))
-				);
-				builder.append_styled('▄', style);
-			}
-			output.push(builder)
-		}
-		output
-	}
-
-}
-
-impl View for ImageView {
-	fn draw(&self, printer: &cursive::Printer) {
-		for y in 0..printer.output_size.y {
-			if let Some(line) = self.ascii_img.get(y) {
-				printer.print_styled((0, y), line.into());
-			}
-		}
-	}
-	
-	fn required_size(&mut self, _constraint: Vec2) -> Vec2 {
-		self.size
-	}
-}
-
-
-fn decode_image(buffer: &[u8]) -> DynamicImage {
-	image::load_from_memory(buffer).unwrap()
-}
