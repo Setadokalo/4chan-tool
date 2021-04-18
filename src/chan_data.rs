@@ -8,7 +8,7 @@ pub struct Thread {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Post {
 	#[serde(flatten)]
-	pub op:           Option<OpData>, // contains data specific to the OP if this post is the OP
+	pub op_data:           Option<OpData>, // contains data specific to the OP if this post is the OP
 	pub no:           isize,          // post ID
 	pub resto:        isize,          // ID of the thread (or 0 if this is the OP)
 	pub now:          String,
@@ -167,11 +167,11 @@ mod tests {
 		let test = std::fs::read_to_string("assets/test/dummy.json").unwrap();
 		let tested: Thread = serde_json::de::from_str(&test).unwrap();
 		assert!(tested.posts.len() == 3);
-		assert!(tested.posts.get(0).unwrap().op.is_some());
+		assert!(tested.posts.get(0).unwrap().op_data.is_some());
 		assert!(tested.posts.get(0).unwrap().attachment.is_some());
-		assert!(tested.posts.get(1).unwrap().op.is_none());
+		assert!(tested.posts.get(1).unwrap().op_data.is_none());
 		assert!(tested.posts.get(1).unwrap().attachment.is_some());
-		assert!(tested.posts.get(2).unwrap().op.is_none());
+		assert!(tested.posts.get(2).unwrap().op_data.is_none());
 		assert!(tested.posts.get(2).unwrap().attachment.is_some());
 	}
 }
