@@ -47,6 +47,7 @@ checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 name = "bench_debug"
 version = "0.1.0"
 dependencies = [
+ "func_wrap",
  "log",
  "proc-macro2",
  "quote",
@@ -379,6 +380,17 @@ dependencies = [
  "string-builder",
  "wasmer_enumset",
  "x11rb",
+]
+
+[[package]]
+name = "func_wrap"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "269593e21b83a2ccbc36c7922e299f11b5671d91b0116138080b9b4cfa5eec05"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
