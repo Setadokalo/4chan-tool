@@ -120,14 +120,6 @@ pub struct BoardsResponse {
 	pub troll_flags: Option<HashMap<String, String>>,
 }
 
-#[test]
-fn test_board_deserialize() {
-	let test = std::fs::read_to_string("assets/test/boards.json").unwrap();
-	let tested: BoardsResponse = serde_json::de::from_str(&test).unwrap();
-	assert!(tested.boards.len() == 79);
-	assert!(tested.troll_flags.is_some())
-}
-
 pub fn opt_int_to_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
 	D: Deserializer<'de>,
@@ -173,5 +165,13 @@ mod tests {
 		assert!(tested.posts.get(1).unwrap().attachment.is_some());
 		assert!(tested.posts.get(2).unwrap().op_data.is_none());
 		assert!(tested.posts.get(2).unwrap().attachment.is_some());
+	}
+
+	#[test]
+	fn test_board_deserialize() {
+		let test = std::fs::read_to_string("assets/test/boards.json").unwrap();
+		let tested: super::BoardsResponse = serde_json::de::from_str(&test).unwrap();
+		assert!(tested.boards.len() == 79);
+		assert!(tested.troll_flags.is_some())
 	}
 }

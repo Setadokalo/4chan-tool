@@ -1,88 +1,87 @@
-use std::{convert::TryInto, error::Error, fmt::Display, time::Instant};
+use std::{convert::TryInto};
 
 use string_builder::Builder as StringBuilder;
 use wasmer_enumset::EnumSet;
-use image::{DynamicImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgba, imageops::FilterType};
+use image::{DynamicImage, GenericImageView, ImageBuffer, Luma, Pixel, Rgba};
 use cursive::{Vec2, View, direction::Orientation, theme::{Color, ColorStyle, ColorType, Style}, utils::markup::StyledString};
 
-use log::*;
+pub use self::data::*;
 
-use crate::get_client;
 
 pub mod traits;
+
+mod data {
+	use std::{convert::TryInto, error::Error, fmt::Display};
+
+	use cursive::utils::markup::StyledString;
+	use image::imageops::FilterType;
+
+	#[derive(Debug)]
+	pub enum ImageRenderable {
+		Styled(Vec<StyledString>),
+		Raw(Vec<String>),
+		// Gui(Window)
+	}
+	
+	#[derive(Debug, Clone, Copy)]
+	pub enum RenderMode {
+		// full 24-bit color
+		Color,
+		Grayscale,
+		Gui,
+	}
+	
+	#[derive(Debug, Clone, Copy)]
+	pub enum ConversionError {
+		InvalidMode
+	}
+	impl Error for ConversionError {}
+	
+	impl Display for ConversionError {
+		 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+			//TODO: proper display function
+			  std::fmt::Debug::fmt(self, f)
+		 }
+	}
+	
+	#[derive(Debug, Clone, Copy)]
+	pub enum ScaleMode {
+		 Nearest,
+		 Linear,
+		Cubic,
+		 Gaussian,
+		 Lanczos,
+		FastNearest,
+	}
+	
+	impl TryInto<FilterType> for ScaleMode {
+		 type Error = ConversionError;
+	
+		 fn try_into(self) -> Result<FilterType, Self::Error> {
+			  match self {
+					ScaleMode::Nearest     => Ok(FilterType::Nearest),
+					ScaleMode::Linear      => Ok(FilterType::Triangle),
+					ScaleMode::Cubic       => Ok(FilterType::CatmullRom),
+					ScaleMode::Gaussian    => Ok(FilterType::Gaussian),
+					ScaleMode::Lanczos     => Ok(FilterType::Lanczos3),
+				// Fast Nearest does not use the image library's scaling functions
+				ScaleMode::FastNearest => Err(ConversionError::InvalidMode)
+			  }
+		 }
+	}
+	
+}
+
+#[derive(Debug)]
 pub struct ImageView {
 	rendered: ImageRenderable,
 	size: Vec2,
 }
 
-#[derive(Debug)]
-enum ImageRenderable {
-	Styled(Vec<StyledString>),
-	Raw(Vec<String>),
-	// Gui(Window)
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum RenderMode {
-	// full 24-bit color
-	Color,
-	Grayscale,
-	Gui,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ConversionError {
-	InvalidMode
-}
-impl Error for ConversionError {}
-
-impl Display for ConversionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		//TODO: proper display function
-        std::fmt::Debug::fmt(self, f)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ScaleMode {
-    Nearest,
-    Linear,
-	Cubic,
-    Gaussian,
-    Lanczos,
-	FastNearest,
-}
-
-impl TryInto<FilterType> for ScaleMode {
-    type Error = ConversionError;
-
-    fn try_into(self) -> Result<FilterType, Self::Error> {
-        match self {
-            ScaleMode::Nearest     => Ok(FilterType::Nearest),
-            ScaleMode::Linear      => Ok(FilterType::Triangle),
-            ScaleMode::Cubic       => Ok(FilterType::CatmullRom),
-            ScaleMode::Gaussian    => Ok(FilterType::Gaussian),
-            ScaleMode::Lanczos     => Ok(FilterType::Lanczos3),
-			// Fast Nearest does not use the image library's scaling functions
-			ScaleMode::FastNearest => Err(ConversionError::InvalidMode)
-        }
-    }
-}
-
 impl ImageView {
-	pub fn new<'a>(url: impl AsRef<str>, dims: impl Into<Vec2>, render_mode: RenderMode, scale_method: ScaleMode) -> ImageView {
+	pub fn new<'a>(url: impl AsRef<str> + Clone + std::fmt::Debug, dims: impl Into<Vec2>, render_mode: RenderMode, scale_method: ScaleMode) -> ImageView {
 		let dims = dims.into();
-		let now = Instant::now();
-		let req = get_client()
-			.get(url.as_ref())
-			.build()
-			.expect("Failed to build boards list request");
-		let resp = get_client()
-			.execute(req)
-			.expect("Error requesting boards list");
-		let bytes = resp.bytes().unwrap();
-
-		info!("Took {:.4} seconds to get image from {}", now.elapsed().as_secs_f64(), url.as_ref());
+		let bytes = crate::net::get_bytes(url.clone());
 		
 		let img = decode_image(bytes.as_ref());
 		let (size, rendered) = match render_mode {
@@ -271,7 +270,7 @@ mod tests {
     use cursive::{direction::Orientation, views::{Button, LinearLayout}};
     use test::Bencher;
 
-    use crate::{SettingsAndData, chan_data::{BoardsResponse, Post}};
+    use crate::{SettingsAndData, data::{BoardsResponse, Post}};
 
     use super::{Divider, ScaleMode, ImageView};
 	

@@ -369,6 +369,7 @@ name = "fourchan-tui"
 version = "0.1.0"
 dependencies = [
  "bench_debug",
+ "bytes",
  "chrono",
  "cursive",
  "image",

@@ -16,6 +16,7 @@ image = "0.23"
 string-builder = "0.2.0"
 wasmer_enumset = "1.0"
 x11rb = "0.8"
+bytes = "1.0.1"
 # logging
 log = "0.4"
 simplelog = "0.10"

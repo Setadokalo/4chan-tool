@@ -2,159 +2,26 @@
 
 extern crate test;
 
-use std::{cell::RefCell, fs::File, ops::Deref, rc::Rc, sync::{Arc, Mutex, Once}, thread, time::{Duration, Instant}};
+use std::{cell::RefCell, fs::File, ops::Deref, rc::Rc, time::Instant};
 
 use bench_debug::log_bench;
-use serde::{Deserialize, Serialize};
 
 
-use chan_data::{BoardsResponse, Post, Thread};
-use chrono::Utc;
-use config::ThreadConfig;
+
 use cursive::{Cursive, Vec2, View, menu::{MenuItem, MenuTree}, theme::{BaseColor, Color}, traits::*, view::SizeConstraint, views::{Button, LinearLayout, ResizedView, ScrollView, SelectView, TextView}};
 
 
-mod chan_data;
-mod views;
-
-use simplelog::{Config, LevelFilter, WriteLogger};
+use simplelog::{Config, LevelFilter, CombinedLogger, WriteLogger};
 use log::*;
 
+mod data;
+mod views;
+mod config;
+mod net;
+
 use views::{Divider, ImageView, RenderMode, ScaleMode, traits::{Panelable, ResizableWeak}};
+use data::{BoardsResponse, Post};
 
-mod config {
-	use std::fmt::Debug;
-
-	use chrono::{DateTime, NaiveDateTime, Utc};
-	use serde::{Deserialize, Serialize};
-	#[derive(Debug, Serialize, Deserialize)]
-	pub struct ThreadConfig {
-		pub board: String,
-		pub id: String,
-		pub name: String,
-		#[serde(skip, default = "get_unix_epoch")]
-		pub last_modified: DateTime<Utc>,
-	}
-
-	pub fn get_unix_epoch() -> DateTime<Utc> {
-		DateTime::from_utc(NaiveDateTime::from_timestamp(0, 0), Utc)
-	}
-	#[cfg(test)] // temporary to make the unused warning go away
-	pub fn load_config(raw_config: String) -> Vec<ThreadConfig> {
-		let mut new_config = Vec::new();
-		for (i, line) in raw_config
-			.split("\n")
-			.enumerate()
-			.filter(|(_, s)| !s.is_empty())
-		{
-			let mut config_iter = line.trim().splitn(2, |c: char| c.is_whitespace());
-			if let Some(thread_config) = config_iter.next() {
-				let target: Vec<&str> = thread_config.split("/").collect();
-				if target.len() != 3 {
-					log::info!(
-						"Unrecognized board link structure at line {}: {}",
-						i, thread_config
-					);
-					continue;
-				}
-				// the rest of the string is in the second iterator value (or there isn't one, in which case we default to the thread config string)
-				let name = config_iter
-					.next()
-					.unwrap_or(thread_config)
-					.trim()
-					.to_string();
-
-				new_config.push(ThreadConfig {
-					board: target[1].to_string(),
-					id: target[2].to_string(),
-					name,
-					// the unix epoch
-					last_modified: get_unix_epoch(),
-				});
-			}
-		}
-		new_config
-	}
-}
-
-
-static mut CLIENT: Option<reqwest::blocking::Client> = None;
-static CLIENT_ONCE: Once = Once::new();
-
-fn get_client() -> &'static reqwest::blocking::Client {
-	unsafe {
-		CLIENT_ONCE.call_once(|| CLIENT = Some(reqwest::blocking::Client::new()));
-		CLIENT.as_ref().unwrap()
-	}
-}
-
-
-#[log_bench]
-fn get_threads_for_board(board: impl Into<String>) -> Vec<Post> {
-	let s = board.into();
-	#[derive(Serialize, Deserialize)]
-
-	struct CatalogPage {
-		page: usize,
-		threads: Vec<Post>,
-	}
-	let now = Instant::now();
-	let req = get_client()
-		.get(format!("https://a.4cdn.org/{}/catalog.json", s.clone()))
-		.build()
-		.expect("Failed to build threads list request");
-	let resp = get_client()
-		.execute(req)
-		.expect("Error requesting threads list");
-
-	info!("Took {:.4} seconds to get /{}/ catalog", now.elapsed().as_secs_f64(), s);
-
-	resp
-		.json::<Vec<CatalogPage>>()
-		.expect("Failed to parse threads list")
-		.remove(0).threads
-}
-
-#[allow(dead_code)]
-fn watch_threads(thread_list: Arc<Mutex<Vec<ThreadConfig>>>) -> ! {
-	info!("Watch daemon started with these threads:");
-	for config in (*thread_list).lock().unwrap().iter() {
-		info!(
-			"Thread \"{}\" in board \"{}\" with name \"{}\"",
-			config.id, config.board, config.name
-		);
-	}
-	loop {
-		for mut thread_cfg in (*thread_list).lock().unwrap().iter_mut() {
-			let req = get_client()
-				.get(format!(
-					"https://a.4cdn.org/{}/thread/{}.json",
-					thread_cfg.board, thread_cfg.id
-				))
-				.header(
-					"If-Modified-Since",
-					thread_cfg
-						.last_modified
-						.to_rfc2822()
-						.replace("+0000", "GMT"),
-				)
-				.build()
-				.expect("Failed to build request");
-			let resp = get_client().execute(req).expect("Error requesting page");
-			if let Ok(thread) = resp.json::<Thread>() {
-				for post in thread.posts.iter() {
-					info!("{:#?}", post);
-				}
-			} else {
-				info!("Failed to parse response - assuming empty response body")
-			}
-			thread_cfg.last_modified = Utc::now();
-			// avoid spamming the API
-			thread::sleep(Duration::from_secs(1));
-		}
-		thread::sleep(Duration::from_secs(20));
-	}
-}
 
 
 pub struct SettingsAndData {
@@ -166,9 +33,17 @@ pub struct SettingsAndData {
 	boards: BoardsResponse,
 }
 
+
 fn main() {
 	// initialize logger
-	WriteLogger::init(LevelFilter::Info, Config::default(), File::create("chantui.log").unwrap()).unwrap();
+	CombinedLogger::init(
+		vec![
+			WriteLogger::new(LevelFilter::Info, Config::default(), File::create("chan_tui.log").unwrap()),
+			// Disabled because cursive spams the log to hell with it's inane bullshit
+			// #[cfg(debug_assertions)]
+			// WriteLogger::new(LevelFilter::Debug, Config::default(), File::create("chan_tui-debug.log").unwrap()),
+		]
+	).unwrap();
 
 	let mut siv = cursive::default();
 
@@ -176,7 +51,7 @@ fn main() {
 		show_nsfw: false,
 		render_mode: RenderMode::Color,
 		scale_mode: ScaleMode::Linear,
-		boards: load_4chan_boards(),
+		boards: net::load_4chan_boards(),
 	}));
 
 	siv.set_user_data(settings.clone());
@@ -212,69 +87,56 @@ fn main() {
 	);
 	siv.set_autohide_menu(false);
 	siv.menubar().add_leaf("Quit", |c| c.quit());
-	siv.menubar().add_subtree(
-		"Settings",
-		MenuTree::new().leaf("Show NSFW Boards", move |c| {
-			{
-				let mut settings = (*settings).borrow_mut();
-				if let MenuItem::Leaf(s, _) = c.menubar().get_subtree(1).unwrap().get_mut(0).unwrap() {
-					if settings.show_nsfw {
-						*s = "Show NSFW Boards".to_string();
-					} else {
-						*s = "Hide NSFW Boards".to_string();
-					}
-				} else {
-					panic!("unknown menu state");
-				}
-				settings.show_nsfw = !settings.show_nsfw;
+	let mut settings_subtree = MenuTree::new().leaf("Show NSFW Boards", move |c| {
+		{
+			let mut settings = (*settings).borrow_mut();
+			if let MenuItem::Leaf(s, _) = c.menubar().get_subtree(1).unwrap().get_mut(0).unwrap() {
+				if settings.show_nsfw { *s = "Show NSFW Boards".to_string(); }
+				else { *s = "Hide NSFW Boards".to_string(); }
+			} else {
+				panic!("unknown menu state");
 			}
-			c.call_on_name(
-				"boards_list",
-				|b_scrollable: &mut ScrollView<SelectView>| {
-					let b = b_scrollable.get_inner_mut();
-					b.clear();
-					add_boards_to_select(&(*settings).borrow(), b);
-				},
-			);
-		}).subtree(
-			"Image Settings",
+			settings.show_nsfw = !settings.show_nsfw;
+		}
+		c.call_on_name(
+			"boards_list",
+			|b_scrollable: &mut ScrollView<SelectView>| {
+				let b = b_scrollable.get_inner_mut();
+				b.clear();
+				add_boards_to_select(&(*settings).borrow(), b);
+			},
+		);
+	});
+
+	fn set_scale_mode(c: &mut Cursive, s: ScaleMode) {
+		c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = s;
+	}
+	fn set_render_mode(c: &mut Cursive, r: RenderMode) {
+		c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().render_mode = r;
+	}
+	
+	settings_subtree.add_subtree(
+		"Image Settings",
+		MenuTree::new()
+		.subtree(
+			"Scale Mode", 
 			MenuTree::new()
-			.subtree(
-				"Scale Mode", 
+				.leaf("Fast Nearest",     |c| set_scale_mode(c, ScaleMode::FastNearest))
+				.leaf("Nearest Neighbor", |c| set_scale_mode(c, ScaleMode::Nearest))
+				.leaf("Linear",           |c| set_scale_mode(c, ScaleMode::Linear))
+				.leaf("Cubic",            |c| set_scale_mode(c, ScaleMode::Cubic))
+				.leaf("Gaussian",         |c| set_scale_mode(c, ScaleMode::Gaussian))
+				.leaf("Lanczos",          |c| set_scale_mode(c, ScaleMode::Lanczos))
+			).subtree(
+				"Render Mode", 
 				MenuTree::new()
-					.leaf("Fast Nearest Neighbor", |c| {
-						c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = ScaleMode::FastNearest;
-					})
-					.leaf("Nearest Neighbor", |c| {
-						c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = ScaleMode::Nearest;
-					})
-					.leaf("Linear", |c| {
-						c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = ScaleMode::Linear;
-					})
-					.leaf("Cubic", |c| {
-						c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = ScaleMode::Cubic;
-					})
-					.leaf("Gaussian", |c| {
-						c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = ScaleMode::Gaussian;
-					})
-					.leaf("Lanczos", |c| {
-						c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().scale_mode = ScaleMode::Lanczos;
-					})
-				).subtree(
-					"Render Mode", 
-					MenuTree::new()
-						.leaf("Color", |c| {
-							c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().render_mode = RenderMode::Color;
-						})
-						.leaf("Grayscale", |c| {
-							c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().render_mode = RenderMode::Grayscale;
-						})
-						.leaf("X11 (unimplemented!)", |c| {
-							c.user_data::<Rc<RefCell<SettingsAndData>>>().unwrap().borrow_mut().render_mode = RenderMode::Gui;
-						})
-					)
-		)
+					.leaf("Color",                |c| set_render_mode(c, RenderMode::Color))
+					.leaf("Grayscale",            |c| set_render_mode(c, RenderMode::Grayscale))
+					.leaf("X11 (unimplemented!)", |c| set_render_mode(c, RenderMode::Gui))
+				)
 	);
+
+	siv.menubar().add_subtree("Settings", settings_subtree);
 	siv.menubar()
 		.add_leaf("Press [ESC] to access the menu", |_| {});
 	siv.add_global_callback(cursive::event::Key::Esc, |c| c.select_menubar());
@@ -316,8 +178,10 @@ fn add_board_key_nav_callbacks(siv: &mut Cursive) {
 	}
 }
 
-fn scroll_to_matching_board(scrollable_board_list: &mut ScrollView<SelectView>, ch: char, cb: &mut Option<cursive::event::Callback>) -> cursive::event::EventResult {
-    let bl = scrollable_board_list.get_inner_mut();
+type EventCallback = cursive::event::Callback;
+
+fn scroll_to_matching_board(scroll_wrap: &mut ScrollView<SelectView>, ch: char, cb: &mut Option<EventCallback>) -> cursive::event::EventResult {
+    let bl = scroll_wrap.get_inner_mut();
     let bl_focus = bl.selected_id().unwrap();
     let i = {
 		// Starting from the current focus, find the first item that
@@ -342,7 +206,7 @@ fn scroll_to_matching_board(scrollable_board_list: &mut ScrollView<SelectView>, 
 		}
 	};
     *cb = Some(bl.set_selection(i));
-    scrollable_board_list.scroll_to_important_area()
+    scroll_wrap.scroll_to_important_area()
 }
 
 /// Creates a LinearLayout for
@@ -361,16 +225,23 @@ fn create_and_add_thread_panel(op: &Post, board: impl AsRef<str>, render_mode: R
 		}
 	}
 	//TODO: implement thread viewing
-	thread_panel.add_child(
+	let mut text_pane = LinearLayout::vertical();
+	text_pane.add_child(
 		Button::new_raw(
 			op.op_data.as_ref().unwrap().sub.as_ref()
 				.unwrap_or(&"Thread".to_string()), 
 			|_| {}
 		)
 	);
+	text_pane.add_child(
+		TextView::new(op.com.as_ref().unwrap_or(&"".to_string()))
+	);
+
+	thread_panel.add_child(text_pane);
 	thread_panel
 }
 
+#[log_bench]
 fn create_board_view(c: &mut Cursive) -> impl View {
 	let mut layout = SelectView::new();
 
@@ -384,7 +255,7 @@ fn create_board_view(c: &mut Cursive) -> impl View {
 		c.call_on_name("threads_list", |threads_view: &mut LinearLayout| {
 			//TODO: There's probably a more idiomatic way to clear the LinearLayout
 			while threads_view.get_child(0).is_some() { threads_view.remove_child(0); };
-			let threads = get_threads_for_board(board);
+			let threads = net::get_threads_for_board(board);
 			let mut iter = threads.iter();
 			
 
@@ -411,22 +282,6 @@ pub fn add_boards_to_select(settings: &SettingsAndData, layout: &mut SelectView)
 			);
 		}
 	}
-}
-
-fn load_4chan_boards() -> BoardsResponse {
-	let now = Instant::now();
-	let req = get_client()
-		.get("https://a.4cdn.org/boards.json")
-		.build()
-		.expect("Failed to build boards list request");
-	let resp = get_client()
-		.execute(req)
-		.expect("Error requesting boards list");
-	info!("Took {:.4} seconds to get 4chan boards", now.elapsed().as_secs_f64());
-
-	resp
-		.json::<BoardsResponse>()
-		.expect("Failed to parse boards list")
 }
 
 fn get_settings(c: &mut Cursive) -> Option<impl Deref<Target = SettingsAndData> + '_> {
